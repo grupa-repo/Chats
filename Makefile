@@ -39,4 +39,4 @@ logs:
 	@docker compose -f $(DOCKER_COMPOSE_FILE) -p $(CONTAINER_NAME) logs -f
 
 test:
-	go test -v ./... -short
+	go test -v $(shell go list ./... | grep -v integration-tests) -short
