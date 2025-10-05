@@ -68,6 +68,11 @@ func (h *Handler) HandleConnectionsByChatID(w http.ResponseWriter, r *http.Reque
 	}
 	defer h.wsManager.RemoveClient(conn)
 
+	// Set up Pong handler to respond to client Pings automatically
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	})
+
 	h.wsManager.AddClient(conn)
 	chat, err := h.chatRepo.GetChatById(chatID)
 	if err != nil {
@@ -88,9 +93,15 @@ func (h *Handler) HandleConnectionsByChatID(w http.ResponseWriter, r *http.Reque
 				return
 			} else {
 				h.logger.Error().Err(err).Msg("Error reading websocket message")
-				return
+				continue // Skip this iteration instead of returning
 			}
 		}
+
+		// Skip empty messages or messages without content (likely ping/control messages)
+		if msg.Content == "" {
+			continue
+		}
+
 		msg.ChatID = chat.Id
 		msg.CreatedAt = time.Now().UTC()
 		msg.MessageType = "text"
