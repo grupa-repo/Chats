@@ -14,11 +14,11 @@ import (
 func setupMessageTestData(t *testing.T) {
 	// Insert test messages for existing chats
 	_, err := testDB.Exec(`
-		INSERT INTO public.message(id, chat_id, sender_id, content, message_type, created_at, read_status)
+		INSERT INTO public.message(id, chat_id, sender_id, content, message_type, created_at, read_status, deleted_at, deleted_by)
 		VALUES
-		('01987073-0a87-7b32-9439-86868dfe9bd4', '01987073-0a87-7b32-9439-86868dfe9bd2', '01959b38-b3f9-7ec5-8ac8-e353bfe08a2d', 'Hello everyone!', 'text', '2024-01-01 10:00:00', false),
-		('01987073-0a87-7b32-9439-86868dfe9bd5', '01987073-0a87-7b32-9439-86868dfe9bd2', '01959b39-febd-770d-9e1b-e5ee392fce54', 'Hi there!', 'text', '2024-01-01 10:01:00', false),
-		('01987073-0a87-7b32-9439-86868dfe9bd6', '01987073-cf13-7621-af36-54ce20056d18', '0195c388-d0f4-77d5-be90-971d38344c74', 'Private message', 'text', '2024-01-01 10:02:00', true)
+		('01987073-0a87-7b32-9439-86868dfe9bd4', '01987073-0a87-7b32-9439-86868dfe9bd2', '01959b38-b3f9-7ec5-8ac8-e353bfe08a2d', 'Hello everyone!', 'text', '2024-01-01 10:00:00', false, NULL, NULL),
+		('01987073-0a87-7b32-9439-86868dfe9bd5', '01987073-0a87-7b32-9439-86868dfe9bd2', '01959b39-febd-770d-9e1b-e5ee392fce54', 'Hi there!', 'text', '2024-01-01 10:01:00', false, NULL, NULL),
+		('01987073-0a87-7b32-9439-86868dfe9bd6', '01987073-cf13-7621-af36-54ce20056d18', '0195c388-d0f4-77d5-be90-971d38344c74', 'Private message', 'text', '2024-01-01 10:02:00', true, NULL, NULL)
 		ON CONFLICT (id) DO NOTHING
 	`)
 	require.NoError(t, err)
@@ -68,11 +68,12 @@ func TestMessageRepository_Create(t *testing.T) {
 		// Verify message was created in database
 		var dbMessage entity.Message
 		err = testDB.QueryRow(`
-			SELECT id, chat_id, sender_id, content, message_type, created_at, read_status
+			SELECT id, chat_id, sender_id, content, message_type, created_at, read_status, deleted_at, deleted_by
 			FROM public.message WHERE id = $1
 		`, messageID).Scan(
 			&dbMessage.ID, &dbMessage.ChatID, &dbMessage.SenderID,
 			&dbMessage.Content, &dbMessage.MessageType, &dbMessage.CreatedAt, &dbMessage.ReadStatus,
+			&dbMessage.DeletedAt, &dbMessage.DeletedBy,
 		)
 
 		require.NoError(t, err)
@@ -197,7 +198,11 @@ func TestMessageRepository_GetByChatID(t *testing.T) {
 			if len(messagesOffset) > 0 {
 				secondMessage := messagesOffset[0]
 				assert.NotEqual(t, firstMessage.ID, secondMessage.ID)
-				assert.True(t, firstMessage.CreatedAt.Before(secondMessage.CreatedAt) || firstMessage.CreatedAt.Equal(secondMessage.CreatedAt))
+				// Since inner query orders DESC and outer ASC, with offset:
+				// - OFFSET 0 gets the most recent message
+				// - OFFSET 1 gets the second most recent message
+				// So secondMessage should be before firstMessage chronologically
+				assert.True(t, secondMessage.CreatedAt.Before(firstMessage.CreatedAt) || secondMessage.CreatedAt.Equal(firstMessage.CreatedAt))
 			}
 		}
 	})

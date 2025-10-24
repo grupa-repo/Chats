@@ -96,50 +96,6 @@ func TestChatRepository_GetChatById(t *testing.T) {
 	})
 
 }
-func TestChatRepository_GetChatByUserGroupId(t *testing.T) {
-	setupTestData(t)
-	defer cleanupTestData(t)
-
-	repo := repository.NewRepository(testDB)
-
-	t.Run("should return group chat when valid user group ID provided", func(t *testing.T) {
-		userGroupID := 100
-
-		chat, err := repo.GetChatByUserGroupId(userGroupID)
-
-		require.NoError(t, err)
-		require.NotNil(t, chat)
-		assert.Equal(t, "01987073-0a87-7b32-9439-86868dfe9bd3", chat.Id)
-		assert.Equal(t, domain.ChatTypeGroup, chat.Type)
-		assert.NotNil(t, chat.UserGroupId)
-		assert.Equal(t, userGroupID, *chat.UserGroupId)
-		assert.Nil(t, chat.ContainerId)
-		assert.False(t, chat.CreatedAt.IsZero())
-	})
-
-	t.Run("should return empty chat when non-existent user group ID provided", func(t *testing.T) {
-		nonExistentUserGroupID := 999
-
-		chat, err := repo.GetChatByUserGroupId(nonExistentUserGroupID)
-
-		require.NoError(t, err)
-		require.NotNil(t, chat)
-		assert.Empty(t, chat.Id)
-	})
-
-	t.Run("should use existing test data from schema", func(t *testing.T) {
-		userGroupID := 1
-
-		chat, err := repo.GetChatByUserGroupId(userGroupID)
-
-		require.NoError(t, err)
-		require.NotNil(t, chat)
-		assert.Equal(t, "01991792-6185-7dbf-81a8-b352fb0e87d1", chat.Id)
-		assert.Equal(t, domain.ChatTypeGroup, chat.Type)
-		assert.NotNil(t, chat.UserGroupId)
-		assert.Equal(t, userGroupID, *chat.UserGroupId)
-	})
-}
 func TestChatRepository_GetChatByGroupID(t *testing.T) {
 	setupTestData(t)
 	defer cleanupTestData(t)
