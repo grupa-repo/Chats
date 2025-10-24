@@ -10,6 +10,7 @@ import (
 	"github.com/HappYness-Project/chatApi/dbs"
 	"github.com/HappYness-Project/chatApi/internal/chat/domain"
 	"github.com/HappYness-Project/chatApi/internal/chat/repository"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,23 +39,27 @@ func setupTestData(t *testing.T) {
 	_, err := testDB.Exec(`
 		INSERT INTO public.chat(id, type, usergroup_id, container_id, created_at)
 		VALUES
-		('01987073-0a87-7b32-9439-86868dfe9bd3', 'group', 100, NULL, CURRENT_TIMESTAMP),
-		('01987073-cf13-7621-af36-54ce20056d19', 'group', NULL, NULL, CURRENT_TIMESTAMP),
-		('01987075-16cb-7337-af15-cd28f64c93a4', 'group', NULL, NULL, CURRENT_TIMESTAMP)
+		($1, 'group', 100, NULL, CURRENT_TIMESTAMP),
+		($2, 'group', 2, NULL, CURRENT_TIMESTAMP),
+		($3, 'group', NULL, NULL, CURRENT_TIMESTAMP)
 		ON CONFLICT (id) DO NOTHING
-	`)
+	`,
+		uuid.MustParse("01987073-0a87-7b32-9439-86868dfe9bd3"),
+		uuid.MustParse("01987073-cf13-7621-af36-54ce20056d19"),
+		uuid.MustParse("01987075-16cb-7337-af15-cd28f64c93a4"),
+	)
 	require.NoError(t, err)
 }
 
 func cleanupTestData(t *testing.T) {
 	_, err := testDB.Exec(`
 		DELETE FROM public.chat
-		WHERE id IN (
-			'01987073-0a87-7b32-9439-86868dfe9bd3',
-			'01987073-cf13-7621-af36-54ce20056d19',
-			'01987075-16cb-7337-af15-cd28f64c93a4'
-		)
-	`)
+		WHERE id IN ($1, $2, $3)
+	`,
+		uuid.MustParse("01987073-0a87-7b32-9439-86868dfe9bd3"),
+		uuid.MustParse("01987073-cf13-7621-af36-54ce20056d19"),
+		uuid.MustParse("01987075-16cb-7337-af15-cd28f64c93a4"),
+	)
 	require.NoError(t, err)
 }
 func TestChatRepository_DatabaseConnection(t *testing.T) {
@@ -71,7 +76,7 @@ func TestChatRepository_GetChatById(t *testing.T) {
 	repo := repository.NewRepository(testDB)
 
 	t.Run("should return chat when valid ID provided", func(t *testing.T) {
-		chatID := "01987073-0a87-7b32-9439-86868dfe9bd3"
+		chatID := uuid.MustParse("01987073-0a87-7b32-9439-86868dfe9bd3")
 
 		chat, err := repo.GetChatById(chatID)
 
@@ -86,13 +91,13 @@ func TestChatRepository_GetChatById(t *testing.T) {
 	})
 
 	t.Run("should return empty chat when non-existent ID provided", func(t *testing.T) {
-		nonExistentID := "01987073-0000-0000-0000-000000000000"
+		nonExistentID := uuid.MustParse("01987073-0000-0000-0000-000000000000")
 
 		chat, err := repo.GetChatById(nonExistentID)
 
 		require.NoError(t, err)
 		require.NotNil(t, chat)
-		assert.Empty(t, chat.Id)
+		assert.Equal(t, uuid.Nil, chat.Id)
 	})
 
 }
@@ -109,7 +114,7 @@ func TestChatRepository_GetChatByGroupID(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, chat)
-		assert.Equal(t, "01987073-0a87-7b32-9439-86868dfe9bd3", chat.Id)
+		assert.Equal(t, uuid.MustParse("01987073-0a87-7b32-9439-86868dfe9bd3"), chat.Id)
 		assert.Equal(t, domain.ChatTypeGroup, chat.Type)
 		assert.NotNil(t, chat.UserGroupId)
 		assert.Equal(t, groupID, *chat.UserGroupId)
@@ -124,7 +129,7 @@ func TestChatRepository_GetChatByGroupID(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, chat)
-		assert.Empty(t, chat.Id)
+		assert.Equal(t, uuid.Nil, chat.Id)
 	})
 
 	t.Run("should return chat regardless of type (unlike GetChatByUserGroupId)", func(t *testing.T) {
@@ -134,7 +139,7 @@ func TestChatRepository_GetChatByGroupID(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, chat)
-		assert.Equal(t, "01987073-cf13-7621-af36-54ce20056d18", chat.Id)
+		assert.Equal(t, uuid.MustParse("01987073-cf13-7621-af36-54ce20056d19"), chat.Id)
 		assert.Equal(t, domain.ChatTypeGroup, chat.Type)
 		assert.NotNil(t, chat.UserGroupId)
 		assert.Equal(t, groupID, *chat.UserGroupId)
@@ -152,7 +157,7 @@ func TestChatRepository_CreateChat(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, createdChat)
-		assert.NotEmpty(t, createdChat.Id)
+		assert.NotEqual(t, uuid.Nil, createdChat.Id)
 		assert.Equal(t, domain.ChatTypeGroup, createdChat.Type)
 		assert.NotNil(t, createdChat.UserGroupId)
 		assert.Equal(t, userGroupID, *createdChat.UserGroupId)
@@ -170,7 +175,7 @@ func TestChatRepository_DeleteChat(t *testing.T) {
 	repo := repository.NewRepository(testDB)
 
 	t.Run("should delete existing chat successfully", func(t *testing.T) {
-		chatID := "01987073-0a87-7b32-9439-86868dfe9bd3"
+		chatID := uuid.MustParse("01987073-0a87-7b32-9439-86868dfe9bd3")
 
 		// Verify chat exists before deletion
 		chat, err := repo.GetChatById(chatID)
@@ -186,11 +191,11 @@ func TestChatRepository_DeleteChat(t *testing.T) {
 		deletedChat, err := repo.GetChatById(chatID)
 		require.NoError(t, err)
 		require.NotNil(t, deletedChat)
-		assert.Empty(t, deletedChat.Id) // Should return empty chat when not found
+		assert.Equal(t, uuid.Nil, deletedChat.Id) // Should return empty chat when not found
 	})
 
 	t.Run("should handle deletion of non-existent chat gracefully", func(t *testing.T) {
-		nonExistentID := "01987073-0000-0000-0000-000000000000"
+		nonExistentID := uuid.MustParse("01987073-0000-0000-0000-000000000000")
 
 		err := repo.DeleteChat(nonExistentID)
 		require.NoError(t, err) // Should not error even if chat doesn't exist
@@ -218,7 +223,7 @@ func TestChatRepository_DeleteChat(t *testing.T) {
 		// Verify it's deleted
 		deletedChat, err := repo.GetChatById(createdChat.Id)
 		require.NoError(t, err)
-		assert.Empty(t, deletedChat.Id)
+		assert.Equal(t, uuid.Nil, deletedChat.Id)
 	})
 
 	t.Run("should not affect other chats when deleting one", func(t *testing.T) {
@@ -240,7 +245,7 @@ func TestChatRepository_DeleteChat(t *testing.T) {
 		// Verify first is deleted
 		deletedChat, err := repo.GetChatById(createdChat1.Id)
 		require.NoError(t, err)
-		assert.Empty(t, deletedChat.Id)
+		assert.Equal(t, uuid.Nil, deletedChat.Id)
 
 		// Verify second still exists
 		existingChat, err := repo.GetChatById(createdChat2.Id)

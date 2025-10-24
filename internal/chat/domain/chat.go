@@ -29,14 +29,14 @@ func (ct ChatType) IsValid() bool {
 }
 
 type Chat struct {
-	Id          string    `json:"id"`
-	Type        ChatType  `json:"type"`
-	UserGroupId *int      `json:"usergroup_id,omitempty"`
-	ContainerId *string   `json:"container_id,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	Id          uuid.UUID  `json:"id"`
+	Type        ChatType   `json:"type"`
+	UserGroupId *int       `json:"usergroup_id,omitempty"`
+	ContainerId *uuid.UUID `json:"container_id,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
 }
 
-func NewChat(chatType ChatType, userGroupId *int, containerId *string) (*Chat, error) {
+func NewChat(chatType ChatType, userGroupId *int, containerId *uuid.UUID) (*Chat, error) {
 	if !chatType.IsValid() {
 		return nil, errors.New("invalid chat type")
 	}
@@ -51,7 +51,7 @@ func NewChat(chatType ChatType, userGroupId *int, containerId *string) (*Chat, e
 	}
 
 	return &Chat{
-		Id:          id.String(),
+		Id:          id,
 		Type:        chatType,
 		UserGroupId: userGroupId,
 		ContainerId: containerId,
@@ -59,7 +59,7 @@ func NewChat(chatType ChatType, userGroupId *int, containerId *string) (*Chat, e
 	}, nil
 }
 
-func validateChatConfiguration(chatType ChatType, userGroupId *int, containerId *string) error {
+func validateChatConfiguration(chatType ChatType, userGroupId *int, containerId *uuid.UUID) error {
 	switch chatType {
 	case ChatTypeGroup:
 		if userGroupId == nil {

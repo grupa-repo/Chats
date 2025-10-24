@@ -53,12 +53,14 @@ func (h *Handler) HandleConnectionsByChatID(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	chatID := chi.URLParam(r, "chatID")
-	if chatID == "" {
+	chatIDStr := chi.URLParam(r, "chatID")
+	if chatIDStr == "" {
 		h.logger.Error().Msg("chatID is required")
 		http.Error(w, "chatID is required", http.StatusBadRequest)
 		return
 	}
+
+	chatID := uuid.MustParse(chatIDStr)
 
 	conn, err := h.wsManager.upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -101,7 +103,7 @@ func (h *Handler) HandleConnectionsByChatID(w http.ResponseWriter, r *http.Reque
 			continue
 		}
 
-		msg.ChatID = uuid.MustParse(chat.Id)
+		msg.ChatID = chat.Id
 		msg.CreatedAt = time.Now().UTC()
 		msg.MessageType = "text"
 

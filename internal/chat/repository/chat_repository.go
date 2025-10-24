@@ -4,13 +4,14 @@ import (
 	"database/sql"
 
 	"github.com/HappYness-Project/chatApi/internal/chat/domain"
+	"github.com/google/uuid"
 )
 
 type ChatRepository interface {
-	GetChatById(chatId string) (*domain.Chat, error)
+	GetChatById(chatId uuid.UUID) (*domain.Chat, error)
 	GetChatByGroupID(groupID int) (*domain.Chat, error)
 	CreateChat(chat *domain.Chat) (*domain.Chat, error)
-	DeleteChat(chatId string) error
+	DeleteChat(chatId uuid.UUID) error
 }
 
 type ChatRepo struct {
@@ -21,7 +22,7 @@ func NewRepository(db *sql.DB) *ChatRepo {
 	return &ChatRepo{db: db}
 }
 
-func (r *ChatRepo) GetChatById(chatId string) (*domain.Chat, error) {
+func (r *ChatRepo) GetChatById(chatId uuid.UUID) (*domain.Chat, error) {
 	rows, err := r.db.Query(`SELECT id, type, usergroup_id, container_id, created_at
 							FROM public.chat
 							WHERE id = $1`, chatId)
@@ -75,7 +76,7 @@ func (r *ChatRepo) CreateChat(chat *domain.Chat) (*domain.Chat, error) {
 	return chat, nil
 }
 
-func (r *ChatRepo) DeleteChat(chatId string) error {
+func (r *ChatRepo) DeleteChat(chatId uuid.UUID) error {
 	_, err := r.db.Exec(`DELETE FROM public.chat WHERE id = $1`, chatId)
 	return err
 }

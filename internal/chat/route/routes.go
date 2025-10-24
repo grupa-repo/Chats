@@ -12,6 +12,7 @@ import (
 	"github.com/HappYness-Project/chatApi/loggers"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 type Handler struct {
@@ -36,8 +37,8 @@ func (h *Handler) RegisterRoutes(router chi.Router) {
 	router.Delete("/api/user-groups/{groupID}/chat", h.RemoveChatByUserGroupId)
 }
 func (h *Handler) GetChatById(w http.ResponseWriter, r *http.Request) {
-	chatID := chi.URLParam(r, "chatID")
-	if chatID == "" {
+	chatIDStr := chi.URLParam(r, "chatID")
+	if chatIDStr == "" {
 		common.ErrorResponse(w, http.StatusBadRequest, common.ProblemDetails{
 			Title:     "Invalid Parameter",
 			ErrorCode: "MissingChatID",
@@ -45,6 +46,8 @@ func (h *Handler) GetChatById(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	chatID := uuid.MustParse(chatIDStr)
 
 	chat, err := h.chatRepo.GetChatById(chatID)
 	if err != nil {
@@ -56,7 +59,7 @@ func (h *Handler) GetChatById(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if chat.Id == "" {
+	if chat.Id == uuid.Nil {
 		common.ErrorResponse(w, http.StatusNotFound, common.ProblemDetails{
 			Title:     "Not Found",
 			ErrorCode: "ChatNotFound",
@@ -146,13 +149,13 @@ func (h *Handler) CreateChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	h.logger.Info().Msg("Successfully created chat with ID: " + createdChat.Id)
+	h.logger.Info().Msgf("Successfully created chat with ID: %s", createdChat.Id)
 	common.WriteJsonWithEncode(w, http.StatusCreated, createdChat)
 }
 
 func (h *Handler) RemoveChat(w http.ResponseWriter, r *http.Request) {
-	chatID := chi.URLParam(r, "chatID")
-	if chatID == "" {
+	chatIDStr := chi.URLParam(r, "chatID")
+	if chatIDStr == "" {
 		common.ErrorResponse(w, http.StatusBadRequest, common.ProblemDetails{
 			Title:     "Invalid Parameter",
 			ErrorCode: "MissingChatID",
@@ -160,6 +163,8 @@ func (h *Handler) RemoveChat(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	chatID := uuid.MustParse(chatIDStr)
 
 	chat, err := h.chatRepo.GetChatById(chatID)
 	if err != nil {
@@ -171,7 +176,7 @@ func (h *Handler) RemoveChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if chat.Id == "" {
+	if chat.Id == uuid.Nil {
 		common.ErrorResponse(w, http.StatusNotFound, common.ProblemDetails{
 			Title:     "Not Found",
 			ErrorCode: "ChatNotFound",
@@ -224,7 +229,7 @@ func (h *Handler) RemoveChatByUserGroupId(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if chat.Id == "" {
+	if chat.Id == uuid.Nil {
 		common.ErrorResponse(w, http.StatusNotFound, common.ProblemDetails{
 			Title:     "Not Found",
 			ErrorCode: "ChatNotFound",
