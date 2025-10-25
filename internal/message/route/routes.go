@@ -35,7 +35,6 @@ func NewHandler(logger *loggers.AppLogger, repo msgRepo.MessageRepo, chatRepo ch
 		wsManager:   wsManager,
 		jwtSecret:   []byte(secretKey),
 	}
-	go handler.HandleMessages()
 	return handler
 }
 
