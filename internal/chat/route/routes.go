@@ -98,6 +98,15 @@ func (h *Handler) GetChatByGroupID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if chat.Id == uuid.Nil {
+		common.ErrorResponse(w, http.StatusNotFound, common.ProblemDetails{
+			Title:     "Not Found",
+			ErrorCode: "ChatNotFound",
+			Detail:    "Chat not found for the provided group ID",
+		})
+		return
+	}
+
 	common.WriteJsonWithEncode(w, http.StatusOK, chat)
 }
 
