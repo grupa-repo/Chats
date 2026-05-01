@@ -1,6 +1,6 @@
 module github.com/HappYness-Project/chatApi
 
-go 1.24.5
+go 1.26.2
 
 require (
 	github.com/go-chi/chi/v5 v5.2.3
