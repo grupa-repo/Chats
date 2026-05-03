@@ -41,4 +41,4 @@ jobs:
           heroku_email: "hyunbin7303@gmail.com"
           branch: "main"
           delay: 3
-          dont_create: true
+          dontautocreate: true
