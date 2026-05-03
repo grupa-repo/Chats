@@ -31,14 +31,12 @@ jobs:
     if: ${{ needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: Install Heroku CLI
-        run: curl https://cli-assets.heroku.com/install-ubuntu.sh | sh
-      - uses: akhileshns/heroku-deploy@v3.15.15
+      - uses: actions/checkout@v4
         with:
-          heroku_api_key: ${{ secrets.HEROKU_API_KEY }}
-          heroku_app_name: chatapi
-          heroku_email: "hyunbin7303@gmail.com"
-          branch: "main"
-          delay: 3
-          dontautocreate: true
+          fetch-depth: 0
+      - name: Deploy to Heroku
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: |
+          git remote add heroku https://heroku:$HEROKU_API_KEY@git.heroku.com/chatapi.git
+          git push heroku main --force
