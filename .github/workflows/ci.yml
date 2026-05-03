@@ -29,9 +29,11 @@ jobs:
   deploy:
     needs: build
     if: ${{ needs.build.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
+      - name: Install Heroku CLI
+        run: curl https://cli-assets.heroku.com/install-ubuntu.sh | sh
       - uses: akhileshns/heroku-deploy@v3.15.15
         with:
           heroku_api_key: ${{ secrets.HEROKU_API_KEY }}
@@ -39,3 +41,4 @@ jobs:
           heroku_email: "hyunbin7303@gmail.com"
           branch: "main"
           delay: 3
+          dont_create: true
