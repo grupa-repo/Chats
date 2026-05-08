@@ -19,6 +19,9 @@ start:
 	@echo "Starting app..."
 	@docker compose -f $(DOCKER_COMPOSE_FILE) -p $(CONTAINER_NAME) up --build -d
 
+restart:
+	make down-hard && make start
+
 down:
 	@echo "Stopping app..."
 	@docker compose -f $(DOCKER_COMPOSE_FILE) -p $(CONTAINER_NAME) down
@@ -26,7 +29,6 @@ down:
 down-hard:
 	@echo "Stopping app and removing volumes..."
 	@docker compose -f $(DOCKER_COMPOSE_FILE) -p $(CONTAINER_NAME) down -v
-	@rm -rf $(DEV_ENV_SETUP_FOLDER)/postgres-data
 
 build:
 	go build -v ./...

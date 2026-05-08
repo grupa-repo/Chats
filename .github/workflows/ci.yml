@@ -41,4 +41,5 @@ jobs:
           HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
         run: |
           heroku git:remote --app hp-chat-api
+          git remote set-url heroku https://heroku:$HEROKU_API_KEY@git.heroku.com/hp-chat-api.git
           git push heroku main --force

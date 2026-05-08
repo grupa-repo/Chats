@@ -2,8 +2,18 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha512"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -12,121 +22,172 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	secret  = "71871847e4548334f720bf055f30829e28f58a52bb4aae7319d5d775622682cf6ba54671a2c270110be13ffb3fea16b3563e2109a4d24612ac5c5469d9cbc9e5"
+	baseURL = "http://localhost:8070"
+)
+
 type Message struct {
-	ID          string    `json:"id"`
-	ChatID      string    `json:"chat_id"`
-	SenderID    string    `json:"sender_id"`
-	Content     string    `json:"content"`
-	MessageType string    `json:"message_type"`
-	CreatedAt   time.Time `json:"created_at"`
-	ReadStatus  bool      `json:"read_status"`
-	IsEdited    bool      `json:"is_edited"`
-	// We might need to update group Id here.
+	ID          string     `json:"id"`
+	ChatID      string     `json:"chat_id"`
+	SenderID    string     `json:"sender_id"`
+	Content     string     `json:"content"`
+	MessageType string     `json:"message_type"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ReadStatus  bool       `json:"read_status"`
+	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+}
+
+func newUUID() string {
+	var b [16]byte
+	rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant
+	return fmt.Sprintf("%s-%s-%s-%s-%s",
+		hex.EncodeToString(b[0:4]),
+		hex.EncodeToString(b[4:6]),
+		hex.EncodeToString(b[6:8]),
+		hex.EncodeToString(b[8:10]),
+		hex.EncodeToString(b[10:]))
+}
+
+func b64(data []byte) string {
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+func generateToken(userID string) string {
+	header, _ := json.Marshal(map[string]string{"alg": "HS512", "typ": "JWT"})
+	payload, _ := json.Marshal(map[string]interface{}{
+		"nameid": userID,
+		"exp":    time.Now().Add(24 * time.Hour).Unix(),
+	})
+	signingInput := b64(header) + "." + b64(payload)
+	mac := hmac.New(sha512.New, []byte(secret))
+	mac.Write([]byte(signingInput))
+	return signingInput + "." + b64(mac.Sum(nil))
+}
+
+func createChat(token string) string {
+	body, _ := json.Marshal(map[string]string{"type": "private"})
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/api/chats", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Fatalf("create chat: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		log.Fatalf("create chat returned %d: %s", resp.StatusCode, b)
+	}
+
+	var chat struct {
+		ID string `json:"id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&chat)
+	return chat.ID
+}
+
+func prompt(scanner *bufio.Scanner, label string) string {
+	fmt.Print(label)
+	scanner.Scan()
+	return strings.TrimSpace(scanner.Text())
 }
 
 func main() {
-	// Get username from user
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Print("Enter your username: ")
-	scanner.Scan()
-	username := strings.TrimSpace(scanner.Text())
 
-	scanner = bufio.NewScanner(os.Stdin)
-	fmt.Print("Enter jwt token: ")
-	scanner.Scan()
-	token := strings.TrimSpace(scanner.Text())
-
+	username := prompt(scanner, "Enter your username: ")
 	if username == "" {
-		fmt.Println("Username cannot be empty!")
+		fmt.Println("Username cannot be empty")
 		return
 	}
 
-	// Server URL
-	serverURL := "ws://localhost:4545/api/user-groups/1/ws?token=" + token
+	tokenInput := prompt(scanner, "JWT token (leave blank to auto-generate): ")
+	var token string
+	if tokenInput == "" {
+		userID := newUUID()
+		token = generateToken(userID)
+		fmt.Printf("Generated token for user ID: %s\n", userID)
+	} else {
+		token = tokenInput
+	}
 
-	// Connect to WebSocket server
-	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
+	chatID := prompt(scanner, "Chat ID (leave blank to create a new chat): ")
+	if chatID == "" {
+		chatID = createChat(token)
+		fmt.Printf("Created chat: %s\n", chatID)
+	}
+
+	u := url.URL{
+		Scheme:   "ws",
+		Host:     "localhost:8070",
+		Path:     fmt.Sprintf("/api/chats/%s/ws", chatID),
+		RawQuery: "token=" + token,
+	}
+
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
-		log.Fatal("Failed to connect to WebSocket server:", err)
+		log.Fatal("Failed to connect:", err)
 	}
 	defer conn.Close()
 
-	fmt.Printf("Connected to WebSocket server at %s as %s\n", serverURL, username)
-	fmt.Println("Type messages to send (or 'quit' to exit):")
+	fmt.Printf("Connected as %s to chat %s\n", username, chatID)
+	fmt.Println("Type a message and press Enter to send. Type 'quit' or Ctrl+C to exit.")
 
-	// Channel to handle interrupt signal
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
-
-	// Channel for incoming messages
 	done := make(chan struct{})
 
-	// Goroutine to read messages from server
 	go func() {
 		defer close(done)
 		for {
 			var msg Message
-			err := conn.ReadJSON(&msg)
-			if err != nil {
-				log.Println("Read error:", err)
+			if err := conn.ReadJSON(&msg); err != nil {
+				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					log.Println("Read error:", err)
+				}
 				return
 			}
-			fmt.Printf("\n[%s] %s: %s\n> ", msg.CreatedAt.Format("15:04:05"), msg.SenderID, msg.Content)
+			if msg.DeletedAt != nil {
+				fmt.Printf("\r[%s] <message %s deleted>\n> ", msg.CreatedAt.Format("15:04:05"), msg.ID)
+			} else {
+				fmt.Printf("\r[%s] %s: %s\n> ", msg.CreatedAt.Format("15:04:05"), msg.SenderID, msg.Content)
+			}
 		}
 	}()
 
-	// Goroutine to send messages
 	go func() {
 		inputScanner := bufio.NewScanner(os.Stdin)
 		fmt.Print("> ")
-
 		for inputScanner.Scan() {
 			text := strings.TrimSpace(inputScanner.Text())
-
 			if text == "quit" {
-				fmt.Println("Disconnecting...")
-				conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-				close(done)
+				conn.WriteMessage(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 				return
 			}
-
 			if text == "" {
 				fmt.Print("> ")
 				continue
 			}
-
-			// Create message
-			msg := Message{
-				ChatID:      "test-chat-1",
-				SenderID:    username,
-				Content:     text,
-				MessageType: "text",
-				CreatedAt:   time.Now(),
-			}
-
-			// Send message to server
-			err := conn.WriteJSON(msg)
-			if err != nil {
+			if err := conn.WriteJSON(map[string]string{"content": text}); err != nil {
 				log.Println("Write error:", err)
 				return
 			}
-
 			fmt.Print("> ")
 		}
 	}()
 
-	// Wait for interrupt signal or done channel
 	select {
 	case <-done:
 	case <-interrupt:
-		fmt.Println("\nInterrupt received, closing connection...")
-
-		// Close connection gracefully
-		err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-		if err != nil {
-			log.Println("Write close error:", err)
-		}
-
+		fmt.Println("\nDisconnecting...")
+		conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		select {
 		case <-done:
 		case <-time.After(time.Second):
