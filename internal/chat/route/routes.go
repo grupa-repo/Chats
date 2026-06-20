@@ -32,6 +32,7 @@ func NewHandler(logger *loggers.AppLogger, chatRepo repository.ChatRepo, secretK
 func (h *Handler) RegisterRoutes(router chi.Router) {
 	router.Get("/api/chats/{chatID}", h.GetChatById)
 	router.Get("/api/user-groups/{groupID}/chat", h.GetChatByGroupID)
+	router.Get("/api/containers/{containerID}/chat", h.GetChatByContainerID)
 	router.Post("/api/chats", h.CreateChat)
 	router.Delete("/api/chats/{chatID}", h.RemoveChat)
 	router.Delete("/api/user-groups/{groupID}/chat", h.RemoveChatByUserGroupId)
@@ -103,6 +104,49 @@ func (h *Handler) GetChatByGroupID(w http.ResponseWriter, r *http.Request) {
 			Title:     "Not Found",
 			ErrorCode: "ChatNotFound",
 			Detail:    "Chat not found for the provided group ID",
+		})
+		return
+	}
+
+	common.WriteJsonWithEncode(w, http.StatusOK, chat)
+}
+
+func (h *Handler) GetChatByContainerID(w http.ResponseWriter, r *http.Request) {
+	containerIDStr := chi.URLParam(r, "containerID")
+	if containerIDStr == "" {
+		common.ErrorResponse(w, http.StatusBadRequest, common.ProblemDetails{
+			Title:     "Invalid Parameter",
+			ErrorCode: "MissingContainerID",
+			Detail:    "containerID is required",
+		})
+		return
+	}
+
+	containerID, err := uuid.Parse(containerIDStr)
+	if err != nil {
+		common.ErrorResponse(w, http.StatusBadRequest, common.ProblemDetails{
+			Title:     "Invalid Parameter",
+			ErrorCode: "InvalidContainerID",
+			Detail:    "The provided containerID is not a valid UUID",
+		})
+		return
+	}
+
+	chat, err := h.chatRepo.GetChatByContainerID(containerID)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("Failed to retrieve chat by containerID")
+		common.ErrorResponse(w, http.StatusInternalServerError, common.ProblemDetails{
+			Title:  "Internal Server Error",
+			Detail: "Error occurred during getting chat by container ID",
+		})
+		return
+	}
+
+	if chat.Id == uuid.Nil {
+		common.ErrorResponse(w, http.StatusNotFound, common.ProblemDetails{
+			Title:     "Not Found",
+			ErrorCode: "ChatNotFound",
+			Detail:    "Chat not found for the provided container ID",
 		})
 		return
 	}
