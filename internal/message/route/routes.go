@@ -8,6 +8,7 @@ import (
 
 	"github.com/HappYness-Project/chatApi/common"
 	domain "github.com/HappYness-Project/chatApi/internal/message/domain"
+	"github.com/HappYness-Project/chatApi/internal/ws"
 	"github.com/HappYness-Project/chatApi/loggers"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -22,21 +23,19 @@ type Handler struct {
 	logger      *loggers.AppLogger
 	messageRepo msgRepo.MessageRepo
 	chatRepo    chatRepo.ChatRepo
-	wsManager   *WebSocketManager
-	tokenAuth   *jwtauth.JWTAuth
+	wsManager *ws.Manager
+	tokenAuth *jwtauth.JWTAuth
 }
 
-func NewHandler(logger *loggers.AppLogger, repo msgRepo.MessageRepo, chatRepo chatRepo.ChatRepo, secretKey string) *Handler {
-	wsManager := NewWebSocketManager(logger)
+func NewHandler(logger *loggers.AppLogger, repo msgRepo.MessageRepo, chatRepo chatRepo.ChatRepo, secretKey string, wsManager *ws.Manager) *Handler {
 	tokenAuth := jwtauth.New("HS512", []byte(secretKey), nil)
-	handler := &Handler{
+	return &Handler{
 		logger:      logger,
 		messageRepo: repo,
 		chatRepo:    chatRepo,
 		wsManager:   wsManager,
 		tokenAuth:   tokenAuth,
 	}
-	return handler
 }
 
 func (h *Handler) RegisterRoutes(router chi.Router) {
@@ -62,11 +61,9 @@ func (h *Handler) HandleConnectionsByChatID(w http.ResponseWriter, r *http.Reque
 
 	chatID := uuid.MustParse(chatIDStr)
 
-	// Extract user ID from JWT token for authorization BEFORE upgrading connection
 	tokenString := r.URL.Query().Get("token")
 	userID := h.extractUserIDFromToken(tokenString)
 
-	// Validate that we successfully extracted a user ID
 	if userID == uuid.Nil {
 		h.logger.Error().Msg("Failed to extract valid user ID from token")
 		common.ErrorResponse(w, http.StatusUnauthorized, common.ProblemDetails{
@@ -77,14 +74,13 @@ func (h *Handler) HandleConnectionsByChatID(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	conn, err := h.wsManager.upgrader.Upgrade(w, r, nil)
+	conn, err := h.wsManager.Upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		h.logger.Error().Err(err).Msg(err.Error())
 		return
 	}
 	defer h.wsManager.RemoveClient(chatID, conn)
 
-	// Set up Pong handler to respond to client Pings automatically
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	})
@@ -109,7 +105,7 @@ func (h *Handler) HandleConnectionsByChatID(w http.ResponseWriter, r *http.Reque
 				return
 			} else {
 				h.logger.Error().Err(err).Msg("Error reading websocket message")
-				continue // Skip this iteration instead of returning
+				continue
 			}
 		}
 
@@ -131,7 +127,6 @@ func (h *Handler) HandleConnectionsByChatID(w http.ResponseWriter, r *http.Reque
 			continue
 		}
 
-		// Skip empty messages or messages without content (likely ping/control messages)
 		if msg.Content == "" {
 			continue
 		}
@@ -147,17 +142,166 @@ func (h *Handler) HandleConnectionsByChatID(w http.ResponseWriter, r *http.Reque
 
 func (h *Handler) HandleMessages() {
 	for {
-		msg := <-h.wsManager.broadcast
+		msg := <-h.wsManager.Broadcast
 		id, _ := uuid.NewV7()
 		msg.ID = id
 		if err := h.messageRepo.Create(msg); err != nil {
 			h.logger.Error().Err(err).Msg("Unable to create a message")
 			continue
 		}
-		fmt.Printf("Broadcasting message to %d clients\n", len(h.wsManager.clients))
+		fmt.Printf("Broadcasting message to %d clients\n", len(h.wsManager.Clients))
 		fmt.Printf("[ChatID:%s]|[SenderID:%s]|Message: %s\n", msg.ChatID, msg.SenderID, msg.Content)
 		fmt.Println("-------------------------------------------------------------")
 		h.wsManager.SendToClients(msg, h.logger)
+	}
+}
+
+// --- Per-user WebSocket endpoint ---
+
+func (h *Handler) HandleUserConnection(w http.ResponseWriter, r *http.Request) {
+	if !h.authenticateRequest(w, r) {
+		common.ErrorResponse(w, http.StatusUnauthorized, common.ProblemDetails{
+			Title:     "Unauthorized",
+			ErrorCode: "AuthenticationFailure",
+			Detail:    "Invalid authentication token",
+		})
+		return
+	}
+
+	tokenString := r.URL.Query().Get("token")
+	userID := h.extractUserIDFromToken(tokenString)
+	if userID == uuid.Nil {
+		common.ErrorResponse(w, http.StatusUnauthorized, common.ProblemDetails{
+			Title:     "Unauthorized",
+			ErrorCode: "InvalidToken",
+			Detail:    "Could not extract user ID from token",
+		})
+		return
+	}
+
+	conn, err := h.wsManager.Upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("WebSocket upgrade failed")
+		return
+	}
+
+	uc := h.wsManager.AddUserConn(userID, conn)
+	defer h.wsManager.RemoveUserConn(userID, uc)
+
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	})
+
+	for {
+		var inbound ws.WSInbound
+		if err := conn.ReadJSON(&inbound); err != nil {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				h.logger.Info().Str("userID", userID.String()).Msg("User disconnected normally")
+				return
+			}
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				h.logger.Error().Err(err).Str("userID", userID.String()).Msg("Unexpected websocket close")
+				return
+			}
+			h.logger.Error().Err(err).Msg("Error reading websocket message")
+			continue
+		}
+
+		switch inbound.Action {
+		case "subscribe":
+			h.handleSubscribe(userID, inbound)
+		case "unsubscribe":
+			h.handleUnsubscribe(userID, inbound)
+		case "send_message", "delete_message":
+			if !h.wsManager.IsSubscribed(userID, inbound.ChatID) {
+				h.wsManager.SendErrorToUser(userID, "not subscribed to this chat")
+				continue
+			}
+			h.wsManager.EnqueueInbound(ws.InboundEnvelope{UserID: userID, Payload: inbound})
+		default:
+			h.wsManager.SendErrorToUser(userID, "unknown action: "+inbound.Action)
+		}
+	}
+}
+
+func (h *Handler) handleSubscribe(userID uuid.UUID, inbound ws.WSInbound) {
+	if inbound.ChatID == uuid.Nil {
+		h.wsManager.SendErrorToUser(userID, "chat_id is required for subscribe")
+		return
+	}
+
+	h.wsManager.Subscribe(userID, inbound.ChatID)
+	h.wsManager.SendToUser(userID, ws.WSOutbound{
+		Event:     "subscribed",
+		ChatID:    inbound.ChatID,
+		Timestamp: time.Now().UTC(),
+	})
+}
+
+func (h *Handler) handleUnsubscribe(userID uuid.UUID, inbound ws.WSInbound) {
+	if inbound.ChatID == uuid.Nil {
+		h.wsManager.SendErrorToUser(userID, "chat_id is required for unsubscribe")
+		return
+	}
+
+	h.wsManager.Unsubscribe(userID, inbound.ChatID)
+	h.wsManager.SendToUser(userID, ws.WSOutbound{
+		Event:     "unsubscribed",
+		ChatID:    inbound.ChatID,
+		Timestamp: time.Now().UTC(),
+	})
+}
+
+func (h *Handler) HandleUserMessages() {
+	for env := range h.wsManager.Inbound {
+		switch env.Payload.Action {
+		case "send_message":
+			if env.Payload.Content == "" {
+				continue
+			}
+			id, _ := uuid.NewV7()
+			now := time.Now().UTC()
+			msg := domain.Message{
+				ID:          id,
+				ChatID:      env.Payload.ChatID,
+				SenderID:    env.UserID,
+				Content:     env.Payload.Content,
+				MessageType: "text",
+				CreatedAt:   now,
+			}
+			if err := h.messageRepo.Create(msg); err != nil {
+				h.logger.Error().Err(err).Msg("Unable to create a message")
+				continue
+			}
+			h.wsManager.SendToChat(msg.ChatID, ws.WSOutbound{
+				Event:  "message",
+				ChatID: msg.ChatID,
+				Message: &ws.OutboundMessage{
+					ID:          msg.ID,
+					SenderID:    msg.SenderID,
+					Content:     msg.Content,
+					MessageType: msg.MessageType,
+					CreatedAt:   msg.CreatedAt,
+				},
+				Timestamp: now,
+			})
+
+		case "delete_message":
+			if err := h.messageRepo.SoftDelete(env.Payload.MessageID, env.UserID); err != nil {
+				h.logger.Error().Err(err).Str("messageID", env.Payload.MessageID.String()).Msg("Failed to delete message")
+				continue
+			}
+			deletedAt := time.Now().UTC()
+			h.wsManager.SendToChat(env.Payload.ChatID, ws.WSOutbound{
+				Event:  "message_deleted",
+				ChatID: env.Payload.ChatID,
+				Message: &ws.OutboundMessage{
+					ID:        env.Payload.MessageID,
+					DeletedAt: &deletedAt,
+				},
+				Timestamp: deletedAt,
+			})
+		}
 	}
 }
 
@@ -227,7 +371,6 @@ func (h *Handler) validateJWTToken(tokenString string) bool {
 		return false
 	}
 
-	// Check expiration manually
 	if exp, ok := token.Get("exp"); ok {
 		if expTime, ok := exp.(time.Time); ok && time.Now().After(expTime) {
 			h.logger.Error().Msg("JWT token is expired")
@@ -251,7 +394,6 @@ func (h *Handler) extractUserIDFromToken(tokenString string) uuid.UUID {
 		return uuid.Nil
 	}
 
-	// Check expiration manually
 	if exp, ok := token.Get("exp"); ok {
 		if expTime, ok := exp.(time.Time); ok && time.Now().After(expTime) {
 			h.logger.Error().Msg("JWT token is expired")
@@ -266,7 +408,6 @@ func (h *Handler) extractUserIDFromToken(tokenString string) uuid.UUID {
 		}
 	}
 
-	// Alternative: try "sub" (subject) claim
 	if sub, ok := claims["sub"].(string); ok {
 		if userID, err := uuid.Parse(sub); err == nil {
 			return userID

@@ -10,6 +10,7 @@ import (
 	chatRoute "github.com/HappYness-Project/chatApi/internal/chat/route"
 	messageRepo "github.com/HappYness-Project/chatApi/internal/message/repository"
 	messageRoute "github.com/HappYness-Project/chatApi/internal/message/route"
+	"github.com/HappYness-Project/chatApi/internal/ws"
 
 	"github.com/HappYness-Project/chatApi/loggers"
 	"github.com/HappYness-Project/chatApi/middlewares"
@@ -50,10 +51,12 @@ func (s *ApiServer) Setup() *chi.Mux {
 
 	mux.Get("/", Home)
 	mux.Get("/health", Home)
-	msgHandler := messageRoute.NewHandler(s.logger, *msgRepo, *chatRepo, s.secretKey)
+	wsManager := ws.NewManager(s.logger)
+	msgHandler := messageRoute.NewHandler(s.logger, *msgRepo, *chatRepo, s.secretKey, wsManager)
 	chatHandler := chatRoute.NewHandler(s.logger, *chatRepo, s.secretKey)
 
 	mux.Get("/api/chats/{chatID}/ws", msgHandler.HandleConnectionsByChatID)
+	mux.Get("/api/ws", msgHandler.HandleUserConnection)
 	mux.Group(func(r chi.Router) {
 		r.Use(jwtauth.Verifier(s.tokenAuth))
 		r.Use(jwtauth.Authenticator)
@@ -62,6 +65,7 @@ func (s *ApiServer) Setup() *chi.Mux {
 		msgHandler.RegisterRoutes(r)
 	})
 	go msgHandler.HandleMessages()
+	go msgHandler.HandleUserMessages()
 	return mux
 }
 
