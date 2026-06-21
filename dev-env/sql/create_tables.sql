@@ -70,3 +70,13 @@ INSERT INTO chat.chat(id, type, usergroup_id, container_id, created_at) VALUES (
 INSERT INTO chat.chat(id, type, usergroup_id, container_id, created_at) VALUES ('01987074-1f7f-7aad-ad76-a4b83544fa2d', 'group', 4, NULL, CURRENT_TIMESTAMP);
 INSERT INTO chat.chat(id, type, usergroup_id, container_id, created_at) VALUES ('01987074-440c-73f8-aa5b-ba2b50a19395', 'group', 5, NULL, CURRENT_TIMESTAMP);
 
+CREATE TABLE IF NOT EXISTS chat.chat_reads (
+    user_id              UUID        NOT NULL,
+    chat_id              UUID        NOT NULL REFERENCES chat.chat(id) ON DELETE CASCADE,
+    last_read_message_id UUID        REFERENCES chat.message(id) ON DELETE SET NULL,
+    last_read_at         TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, chat_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_reads_chat ON chat.chat_reads (chat_id);
+
