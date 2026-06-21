@@ -2,9 +2,11 @@ DEV_ENV_SETUP_FOLDER ?= ./dev-env
 DOCKER_COMPOSE_FILE ?= $(DEV_ENV_SETUP_FOLDER)/docker-compose.yml
 CONTAINER_NAME ?= "chat-containers"
 VERSION ?= $(shell git rev-parse --short HEAD)
+QA_URL ?= https://hp-chat-api-ff9486774a07.herokuapp.com
 
 help:
-	@echo "make version to get the current version"
+	@echo "make version        compare local HEAD against the QA deployment"
+	@echo "make version-local  print the local git short SHA"
 	@echo "make start to start go-api server"
 	@echo "make build"
 	@echo "make rebuild-docker"
@@ -13,6 +15,26 @@ help:
 	@echo "make test to run the unit test"
 
 version:
+	@LOCAL=$$(git rev-parse --short HEAD); \
+	DEPLOYED=$$(curl -fsS $(QA_URL)/version | jq -r '.version'); \
+	if [ -z "$$DEPLOYED" ] || [ "$$DEPLOYED" = "null" ]; then \
+	  echo "could not read deployed version from $(QA_URL)/version"; exit 1; \
+	fi; \
+	DEPLOYED_SHORT=$$(echo $$DEPLOYED | cut -c1-7); \
+	echo "Local:    $$LOCAL"; \
+	echo "Deployed: $$DEPLOYED_SHORT  ($(QA_URL))"; \
+	if [ "$$LOCAL" = "$$DEPLOYED_SHORT" ]; then \
+	  echo "in sync"; \
+	else \
+	  AHEAD=$$(git log --oneline $$DEPLOYED_SHORT..HEAD 2>/dev/null | wc -l | tr -d ' '); \
+	  if [ "$$AHEAD" = "0" ]; then \
+	    echo "out of sync (deployed SHA not in local history -- try git fetch)"; \
+	  else \
+	    echo "out of sync -- local is $$AHEAD commit(s) ahead"; \
+	  fi; \
+	fi
+
+version-local:
 	@echo $(VERSION)
 
 start:

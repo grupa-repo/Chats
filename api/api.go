@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/HappYness-Project/chatApi/common"
 	chatRepo "github.com/HappYness-Project/chatApi/internal/chat/repository"
@@ -54,6 +55,7 @@ func (s *ApiServer) Setup() *chi.Mux {
 
 	mux.Get("/", Home)
 	mux.Get("/health", Home)
+	mux.Get("/version", Version)
 	wsManager := ws.NewManager(s.logger)
 	msgHandler := messageRoute.NewHandler(s.logger, *msgRepo, *chatRepo, s.secretKey, wsManager)
 	chatHandler := chatRoute.NewHandler(s.logger, *chatRepo, s.secretKey)
@@ -86,7 +88,29 @@ func Home(w http.ResponseWriter, r *http.Request) {
 	}{
 		Status:  "active",
 		Message: "Message Service server",
-		Version: "1.0.0",
+		Version: deployedVersion(),
 	}
 	common.WriteJsonWithEncode(w, http.StatusOK, payload)
+}
+
+func Version(w http.ResponseWriter, r *http.Request) {
+	var payload = struct {
+		Service string `json:"service"`
+		Version string `json:"version"`
+		Env     string `json:"env"`
+	}{
+		Service: "chats",
+		Version: deployedVersion(),
+		Env:     os.Getenv("APP_ENV"),
+	}
+	common.WriteJsonWithEncode(w, http.StatusOK, payload)
+}
+
+// deployedVersion returns the commit SHA of the running build.
+// Heroku injects SOURCE_VERSION automatically; falls back to "dev" for local runs.
+func deployedVersion() string {
+	if v := os.Getenv("SOURCE_VERSION"); v != "" {
+		return v
+	}
+	return "dev"
 }
