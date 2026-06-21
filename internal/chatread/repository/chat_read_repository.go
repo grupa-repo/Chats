@@ -3,6 +3,8 @@ package repository
 import (
 	"database/sql"
 	"errors"
+	"strings"
+	"time"
 
 	"github.com/HappYness-Project/chatApi/internal/chatread/domain"
 	"github.com/google/uuid"
@@ -12,6 +14,14 @@ type ChatReadRepository interface {
 	Upsert(userID, chatID uuid.UUID, lastReadMessageID uuid.UUID) (*domain.ChatRead, error)
 	Get(userID, chatID uuid.UUID) (*domain.ChatRead, error)
 	UnreadCount(userID, chatID uuid.UUID) (int, error)
+	ListUnreadCounts(userID uuid.UUID, chatIDs []uuid.UUID) ([]UnreadEntry, error)
+	ListReads(userID uuid.UUID) ([]domain.ChatRead, error)
+}
+
+type UnreadEntry struct {
+	ChatID        uuid.UUID  `json:"chat_id"`
+	Count         int        `json:"count"`
+	LastMessageAt *time.Time `json:"last_message_at,omitempty"`
 }
 
 type ChatReadRepo struct {
@@ -68,6 +78,94 @@ func (r *ChatReadRepo) Get(userID, chatID uuid.UUID) (*domain.ChatRead, error) {
 		return nil, err
 	}
 	return cr, nil
+}
+
+// ListUnreadCounts returns per-chat unread counts and last_message_at for the user.
+// If chatIDs is non-empty, scope is restricted to those chats; otherwise scope
+// is derived from chats the user has either read or messaged in.
+func (r *ChatReadRepo) ListUnreadCounts(userID uuid.UUID, chatIDs []uuid.UUID) ([]UnreadEntry, error) {
+	var rows *sql.Rows
+	var err error
+
+	const countExpr = `
+		COALESCE((
+			SELECT COUNT(*) FROM message m
+			LEFT JOIN chat_reads cr2 ON cr2.user_id = $1 AND cr2.chat_id = m.chat_id
+			WHERE m.chat_id = tc.chat_id
+			  AND m.deleted_at IS NULL
+			  AND m.sender_id <> $1
+			  AND (cr2.last_read_message_id IS NULL OR m.id > cr2.last_read_message_id)
+		), 0) AS unread_count,
+		(SELECT MAX(created_at) FROM message
+		  WHERE chat_id = tc.chat_id AND deleted_at IS NULL) AS last_message_at`
+
+	if len(chatIDs) == 0 {
+		query := `
+			WITH target_chats AS (
+				SELECT chat_id FROM chat_reads WHERE user_id = $1
+				UNION
+				SELECT DISTINCT chat_id FROM message
+				  WHERE sender_id = $1 AND deleted_at IS NULL
+			)
+			SELECT tc.chat_id,` + countExpr + `
+			FROM target_chats tc
+			ORDER BY last_message_at DESC NULLS LAST`
+		rows, err = r.db.Query(query, userID)
+	} else {
+		ids := make([]string, len(chatIDs))
+		for i, id := range chatIDs {
+			ids[i] = id.String()
+		}
+		query := `
+			SELECT tc.chat_id,` + countExpr + `
+			FROM unnest(string_to_array($2::text, ',')::uuid[]) AS tc(chat_id)
+			ORDER BY last_message_at DESC NULLS LAST`
+		rows, err = r.db.Query(query, userID, strings.Join(ids, ","))
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []UnreadEntry
+	for rows.Next() {
+		var e UnreadEntry
+		if err := rows.Scan(&e.ChatID, &e.Count, &e.LastMessageAt); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+func (r *ChatReadRepo) ListReads(userID uuid.UUID) ([]domain.ChatRead, error) {
+	query := `
+		SELECT user_id, chat_id, last_read_message_id, last_read_at
+		FROM chat_reads
+		WHERE user_id = $1
+		ORDER BY last_read_at DESC`
+
+	rows, err := r.db.Query(query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reads []domain.ChatRead
+	for rows.Next() {
+		var cr domain.ChatRead
+		if err := rows.Scan(&cr.UserID, &cr.ChatID, &cr.LastReadMessageID, &cr.LastReadAt); err != nil {
+			return nil, err
+		}
+		reads = append(reads, cr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return reads, nil
 }
 
 func (r *ChatReadRepo) UnreadCount(userID, chatID uuid.UUID) (int, error) {

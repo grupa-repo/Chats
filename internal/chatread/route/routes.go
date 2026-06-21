@@ -3,8 +3,10 @@ package route
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/HappYness-Project/chatApi/common"
+	"github.com/HappYness-Project/chatApi/internal/chatread/domain"
 	"github.com/HappYness-Project/chatApi/internal/chatread/repository"
 	"github.com/HappYness-Project/chatApi/loggers"
 	"github.com/go-chi/chi/v5"
@@ -28,6 +30,87 @@ func (h *Handler) RegisterRoutes(router chi.Router) {
 	router.Post("/api/chats/{chatID}/read", h.MarkRead)
 	router.Get("/api/chats/{chatID}/read", h.GetRead)
 	router.Get("/api/chats/{chatID}/unread-count", h.GetUnreadCount)
+	router.Get("/api/chats/unread", h.ListUnread)
+	router.Get("/api/chats/reads", h.ListReads)
+}
+
+func (h *Handler) ListUnread(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.userIDFromContext(w, r)
+	if !ok {
+		return
+	}
+
+	chatIDs, err := parseChatIDsQuery(r)
+	if err != nil {
+		common.ErrorResponse(w, http.StatusBadRequest, common.ProblemDetails{
+			Title:     "Invalid Parameter",
+			ErrorCode: "InvalidChatIDs",
+			Detail:    err.Error(),
+		})
+		return
+	}
+
+	entries, err := h.chatReadRepo.ListUnreadCounts(userID, chatIDs)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("Failed to list unread counts")
+		common.ErrorResponse(w, http.StatusInternalServerError, common.ProblemDetails{
+			Title:  "Internal Server Error",
+			Detail: "Error occurred while listing unread counts",
+		})
+		return
+	}
+	if entries == nil {
+		entries = []repository.UnreadEntry{}
+	}
+
+	common.WriteJsonWithEncode(w, http.StatusOK, UnreadListResponse{Chats: entries})
+}
+
+func (h *Handler) ListReads(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.userIDFromContext(w, r)
+	if !ok {
+		return
+	}
+
+	reads, err := h.chatReadRepo.ListReads(userID)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("Failed to list chat read markers")
+		common.ErrorResponse(w, http.StatusInternalServerError, common.ProblemDetails{
+			Title:  "Internal Server Error",
+			Detail: "Error occurred while listing read markers",
+		})
+		return
+	}
+	if reads == nil {
+		reads = []domain.ChatRead{}
+	}
+
+	common.WriteJsonWithEncode(w, http.StatusOK, ReadsListResponse{Reads: reads})
+}
+
+// parseChatIDsQuery accepts repeated ?chat_id=uuid OR ?chat_ids=uuid1,uuid2.
+// Returns nil when neither is provided (caller falls back to user-scoped derivation).
+func parseChatIDsQuery(r *http.Request) ([]uuid.UUID, error) {
+	raw := append([]string(nil), r.URL.Query()["chat_id"]...)
+	if csv := r.URL.Query().Get("chat_ids"); csv != "" {
+		for _, p := range strings.Split(csv, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				raw = append(raw, p)
+			}
+		}
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	ids := make([]uuid.UUID, 0, len(raw))
+	for _, s := range raw {
+		id, err := uuid.Parse(s)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func (h *Handler) MarkRead(w http.ResponseWriter, r *http.Request) {
