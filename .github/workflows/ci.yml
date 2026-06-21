@@ -43,3 +43,27 @@ jobs:
           heroku git:remote --app hp-chat-api
           git remote set-url heroku https://heroku:$HEROKU_API_KEY@git.heroku.com/hp-chat-api.git
           git push heroku main --force
+
+      - name: Verify deployed version
+        env:
+          QA_URL: https://hp-chat-api-ff9486774a07.herokuapp.com
+          EXPECTED: ${{ github.sha }}
+          TIMEOUT_SECONDS: "180"
+          POLL_INTERVAL: "5"
+        run: |
+          EXPECTED_SHORT=$(echo "$EXPECTED" | cut -c1-7)
+          echo "Expecting deployed version to match $EXPECTED_SHORT"
+          deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            DEPLOYED=$(curl -fsS "$QA_URL/version" | jq -r '.version' || echo "")
+            DEPLOYED_SHORT=$(echo "$DEPLOYED" | cut -c1-7)
+            if [ "$DEPLOYED_SHORT" = "$EXPECTED_SHORT" ]; then
+              echo "Deployed version $DEPLOYED_SHORT matches expected — release is live"
+              exit 0
+            fi
+            echo "Deployed: '${DEPLOYED_SHORT:-?}' — waiting ${POLL_INTERVAL}s"
+            sleep "$POLL_INTERVAL"
+          done
+          echo "Timed out after ${TIMEOUT_SECONDS}s waiting for $EXPECTED_SHORT to be live"
+          echo "Last reported version: ${DEPLOYED_SHORT:-unknown}"
+          exit 1

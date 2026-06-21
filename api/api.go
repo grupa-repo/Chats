@@ -107,8 +107,13 @@ func Version(w http.ResponseWriter, r *http.Request) {
 }
 
 // deployedVersion returns the commit SHA of the running build.
-// Heroku injects SOURCE_VERSION automatically; falls back to "dev" for local runs.
+// HEROKU_SLUG_COMMIT is exposed by Heroku's runtime-dyno-metadata labs feature;
+// SOURCE_VERSION exists only during build but some buildpacks propagate it.
+// Falls back to "dev" for local runs.
 func deployedVersion() string {
+	if v := os.Getenv("HEROKU_SLUG_COMMIT"); v != "" {
+		return v
+	}
 	if v := os.Getenv("SOURCE_VERSION"); v != "" {
 		return v
 	}
