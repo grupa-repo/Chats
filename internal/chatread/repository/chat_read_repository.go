@@ -12,10 +12,16 @@ import (
 
 type ChatReadRepository interface {
 	Upsert(userID, chatID uuid.UUID, lastReadMessageID uuid.UUID) (*domain.ChatRead, error)
+	BulkUpsert(userID uuid.UUID, items []BulkReadItem) ([]domain.ChatRead, error)
 	Get(userID, chatID uuid.UUID) (*domain.ChatRead, error)
 	UnreadCount(userID, chatID uuid.UUID) (int, error)
 	ListUnreadCounts(userID uuid.UUID, chatIDs []uuid.UUID) ([]UnreadEntry, error)
 	ListReads(userID uuid.UUID) ([]domain.ChatRead, error)
+}
+
+type BulkReadItem struct {
+	ChatID            uuid.UUID
+	LastReadMessageID uuid.UUID
 }
 
 type UnreadEntry struct {
@@ -59,6 +65,71 @@ func (r *ChatReadRepo) Upsert(userID, chatID uuid.UUID, lastReadMessageID uuid.U
 		return nil, err
 	}
 	return cr, nil
+}
+
+// BulkUpsert applies the monotonic upsert across many (chat_id, last_read_message_id)
+// pairs in a single round-trip. It returns the authoritative row for every input chat,
+// including ones whose marker was not advanced because the request was stale.
+func (r *ChatReadRepo) BulkUpsert(userID uuid.UUID, items []BulkReadItem) ([]domain.ChatRead, error) {
+	if len(items) == 0 {
+		return []domain.ChatRead{}, nil
+	}
+
+	chatIDs := make([]string, len(items))
+	msgIDs := make([]string, len(items))
+	for i, it := range items {
+		chatIDs[i] = it.ChatID.String()
+		msgIDs[i] = it.LastReadMessageID.String()
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	upsert := `
+		INSERT INTO chat_reads (user_id, chat_id, last_read_message_id, last_read_at)
+		SELECT $1, c, m, NOW()
+		FROM unnest(
+		    string_to_array($2::text, ',')::uuid[],
+		    string_to_array($3::text, ',')::uuid[]
+		) AS t(c, m)
+		ON CONFLICT (user_id, chat_id) DO UPDATE
+		SET last_read_message_id = EXCLUDED.last_read_message_id,
+		    last_read_at         = EXCLUDED.last_read_at
+		WHERE EXCLUDED.last_read_message_id > chat_reads.last_read_message_id
+		   OR chat_reads.last_read_message_id IS NULL`
+	if _, err := tx.Exec(upsert, userID, strings.Join(chatIDs, ","), strings.Join(msgIDs, ",")); err != nil {
+		return nil, err
+	}
+
+	read := `
+		SELECT user_id, chat_id, last_read_message_id, last_read_at
+		FROM chat_reads
+		WHERE user_id = $1
+		  AND chat_id = ANY(string_to_array($2::text, ',')::uuid[])`
+	rows, err := tx.Query(read, userID, strings.Join(chatIDs, ","))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []domain.ChatRead
+	for rows.Next() {
+		var cr domain.ChatRead
+		if err := rows.Scan(&cr.UserID, &cr.ChatID, &cr.LastReadMessageID, &cr.LastReadAt); err != nil {
+			return nil, err
+		}
+		out = append(out, cr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *ChatReadRepo) Get(userID, chatID uuid.UUID) (*domain.ChatRead, error) {

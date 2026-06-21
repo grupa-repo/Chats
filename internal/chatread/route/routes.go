@@ -15,8 +15,8 @@ import (
 )
 
 type Handler struct {
-	logger        *loggers.AppLogger
-	chatReadRepo  repository.ChatReadRepo
+	logger       *loggers.AppLogger
+	chatReadRepo repository.ChatReadRepo
 }
 
 func NewHandler(logger *loggers.AppLogger, chatReadRepo repository.ChatReadRepo) *Handler {
@@ -32,6 +32,83 @@ func (h *Handler) RegisterRoutes(router chi.Router) {
 	router.Get("/api/chats/{chatID}/unread-count", h.GetUnreadCount)
 	router.Get("/api/chats/unread", h.ListUnread)
 	router.Get("/api/chats/reads", h.ListReads)
+	router.Post("/api/chats/reads", h.BulkMarkRead)
+}
+
+const bulkMarkReadMax = 200
+
+func (h *Handler) BulkMarkRead(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.userIDFromContext(w, r)
+	if !ok {
+		return
+	}
+
+	var req BulkMarkReadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		common.ErrorResponse(w, http.StatusBadRequest, common.ProblemDetails{
+			Title:     "Invalid Request Body",
+			ErrorCode: "InvalidJSON",
+			Detail:    "Unable to decode request body as JSON",
+		})
+		return
+	}
+	if len(req.Reads) == 0 {
+		common.ErrorResponse(w, http.StatusBadRequest, common.ProblemDetails{
+			Title:     "Invalid Parameter",
+			ErrorCode: "EmptyReads",
+			Detail:    "reads must contain at least one entry",
+		})
+		return
+	}
+	if len(req.Reads) > bulkMarkReadMax {
+		common.ErrorResponse(w, http.StatusBadRequest, common.ProblemDetails{
+			Title:     "Invalid Parameter",
+			ErrorCode: "TooManyReads",
+			Detail:    "reads exceeds the per-request limit",
+		})
+		return
+	}
+
+	seen := make(map[uuid.UUID]struct{}, len(req.Reads))
+	items := make([]repository.BulkReadItem, 0, len(req.Reads))
+	for _, it := range req.Reads {
+		if it.ChatID == uuid.Nil || it.LastReadMessageID == uuid.Nil {
+			common.ErrorResponse(w, http.StatusBadRequest, common.ProblemDetails{
+				Title:     "Invalid Parameter",
+				ErrorCode: "MissingIDs",
+				Detail:    "each entry requires chat_id and last_read_message_id",
+			})
+			return
+		}
+		if _, dup := seen[it.ChatID]; dup {
+			common.ErrorResponse(w, http.StatusBadRequest, common.ProblemDetails{
+				Title:     "Invalid Parameter",
+				ErrorCode: "DuplicateChatID",
+				Detail:    "chat_id appears more than once: " + it.ChatID.String(),
+			})
+			return
+		}
+		seen[it.ChatID] = struct{}{}
+		items = append(items, repository.BulkReadItem{
+			ChatID:            it.ChatID,
+			LastReadMessageID: it.LastReadMessageID,
+		})
+	}
+
+	reads, err := h.chatReadRepo.BulkUpsert(userID, items)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("Failed to bulk upsert chat read markers")
+		common.ErrorResponse(w, http.StatusInternalServerError, common.ProblemDetails{
+			Title:  "Internal Server Error",
+			Detail: "Error occurred while updating read markers",
+		})
+		return
+	}
+	if reads == nil {
+		reads = []domain.ChatRead{}
+	}
+
+	common.WriteJsonWithEncode(w, http.StatusOK, ReadsListResponse{Reads: reads})
 }
 
 func (h *Handler) ListUnread(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +170,7 @@ func (h *Handler) ListReads(w http.ResponseWriter, r *http.Request) {
 func parseChatIDsQuery(r *http.Request) ([]uuid.UUID, error) {
 	raw := append([]string(nil), r.URL.Query()["chat_id"]...)
 	if csv := r.URL.Query().Get("chat_ids"); csv != "" {
-		for _, p := range strings.Split(csv, ",") {
+		for p := range strings.SplitSeq(csv, ",") {
 			if p = strings.TrimSpace(p); p != "" {
 				raw = append(raw, p)
 			}
