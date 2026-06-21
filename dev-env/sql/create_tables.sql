@@ -79,4 +79,3 @@ CREATE TABLE IF NOT EXISTS chat.chat_reads (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_reads_chat ON chat.chat_reads (chat_id);
-

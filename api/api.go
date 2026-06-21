@@ -8,6 +8,8 @@ import (
 	"github.com/HappYness-Project/chatApi/common"
 	chatRepo "github.com/HappYness-Project/chatApi/internal/chat/repository"
 	chatRoute "github.com/HappYness-Project/chatApi/internal/chat/route"
+	chatReadRepo "github.com/HappYness-Project/chatApi/internal/chatread/repository"
+	chatReadRoute "github.com/HappYness-Project/chatApi/internal/chatread/route"
 	messageRepo "github.com/HappYness-Project/chatApi/internal/message/repository"
 	messageRoute "github.com/HappYness-Project/chatApi/internal/message/route"
 	"github.com/HappYness-Project/chatApi/internal/ws"
@@ -43,6 +45,7 @@ func (s *ApiServer) Setup() *chi.Mux {
 
 	msgRepo := messageRepo.NewRepository(s.db)
 	chatRepo := chatRepo.NewRepository(s.db)
+	chatReadRepo := chatReadRepo.NewRepository(s.db)
 
 	mux.Use(middleware.Logger)
 	mux.Use(middleware.Recoverer)
@@ -54,6 +57,7 @@ func (s *ApiServer) Setup() *chi.Mux {
 	wsManager := ws.NewManager(s.logger)
 	msgHandler := messageRoute.NewHandler(s.logger, *msgRepo, *chatRepo, s.secretKey, wsManager)
 	chatHandler := chatRoute.NewHandler(s.logger, *chatRepo, s.secretKey)
+	chatReadHandler := chatReadRoute.NewHandler(s.logger, *chatReadRepo)
 
 	mux.Get("/api/chats/{chatID}/ws", msgHandler.HandleConnectionsByChatID)
 	mux.Get("/api/ws", msgHandler.HandleUserConnection)
@@ -63,6 +67,7 @@ func (s *ApiServer) Setup() *chi.Mux {
 
 		chatHandler.RegisterRoutes(r)
 		msgHandler.RegisterRoutes(r)
+		chatReadHandler.RegisterRoutes(r)
 	})
 	go msgHandler.HandleMessages()
 	go msgHandler.HandleUserMessages()
