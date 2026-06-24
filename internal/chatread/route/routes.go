@@ -1,13 +1,16 @@
 package route
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/HappYness-Project/chatApi/common"
+	"github.com/HappYness-Project/chatApi/internal/broadcaster"
 	"github.com/HappYness-Project/chatApi/internal/chatread/domain"
 	"github.com/HappYness-Project/chatApi/internal/chatread/repository"
+	"github.com/HappYness-Project/chatApi/internal/ws"
 	"github.com/HappYness-Project/chatApi/loggers"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/jwtauth"
@@ -17,12 +20,35 @@ import (
 type Handler struct {
 	logger       *loggers.AppLogger
 	chatReadRepo repository.ChatReadRepo
+	broadcaster  broadcaster.Broadcaster
 }
 
-func NewHandler(logger *loggers.AppLogger, chatReadRepo repository.ChatReadRepo) *Handler {
+func NewHandler(logger *loggers.AppLogger, chatReadRepo repository.ChatReadRepo, b broadcaster.Broadcaster) *Handler {
 	return &Handler{
 		logger:       logger,
 		chatReadRepo: chatReadRepo,
+		broadcaster:  b,
+	}
+}
+
+func (h *Handler) publishChatRead(ctx context.Context, cr *domain.ChatRead) {
+	if cr == nil || cr.LastReadMessageID == nil {
+		return
+	}
+	payload, err := json.Marshal(ws.ChatReadPayload{
+		UserID:            cr.UserID,
+		LastReadMessageID: *cr.LastReadMessageID,
+	})
+	if err != nil {
+		h.logger.Error().Err(err).Msg("Failed to marshal chat.read payload")
+		return
+	}
+	if err := h.broadcaster.Publish(ctx, broadcaster.ChatTopic(cr.ChatID), broadcaster.Event{
+		Type:    ws.EventChatRead,
+		ChatID:  cr.ChatID.String(),
+		Payload: payload,
+	}); err != nil {
+		h.logger.Error().Err(err).Str("chatID", cr.ChatID.String()).Msg("Failed to publish chat.read")
 	}
 }
 
@@ -106,6 +132,10 @@ func (h *Handler) BulkMarkRead(w http.ResponseWriter, r *http.Request) {
 	}
 	if reads == nil {
 		reads = []domain.ChatRead{}
+	}
+
+	for i := range reads {
+		h.publishChatRead(r.Context(), &reads[i])
 	}
 
 	common.WriteJsonWithEncode(w, http.StatusOK, ReadsListResponse{Reads: reads})
@@ -227,6 +257,8 @@ func (h *Handler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	h.publishChatRead(r.Context(), cr)
 
 	common.WriteJsonWithEncode(w, http.StatusOK, cr)
 }

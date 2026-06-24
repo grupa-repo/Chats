@@ -17,6 +17,7 @@ type ChatReadRepository interface {
 	UnreadCount(userID, chatID uuid.UUID) (int, error)
 	ListUnreadCounts(userID uuid.UUID, chatIDs []uuid.UUID) ([]UnreadEntry, error)
 	ListReads(userID uuid.UUID) ([]domain.ChatRead, error)
+	ListChatIDsForUser(userID uuid.UUID) ([]uuid.UUID, error)
 }
 
 type BulkReadItem struct {
@@ -237,6 +238,36 @@ func (r *ChatReadRepo) ListReads(userID uuid.UUID) ([]domain.ChatRead, error) {
 		return nil, err
 	}
 	return reads, nil
+}
+
+// ListChatIDsForUser returns the chat IDs a user is associated with — chats
+// they've read or messaged in. Used as a stand-in for the external membership
+// API until that integration lands; once it does, swap this for the
+// authoritative source.
+func (r *ChatReadRepo) ListChatIDsForUser(userID uuid.UUID) ([]uuid.UUID, error) {
+	query := `
+		SELECT chat_id FROM chat_reads WHERE user_id = $1
+		UNION
+		SELECT DISTINCT chat_id FROM message
+		  WHERE sender_id = $1 AND deleted_at IS NULL`
+	rows, err := r.db.Query(query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
 
 func (r *ChatReadRepo) UnreadCount(userID, chatID uuid.UUID) (int, error) {

@@ -46,11 +46,26 @@ type ErrorPayload struct {
 	Error string `json:"error"`
 }
 
+// ReadyPayload is the payload for the "ready" event sent after the server has
+// subscribed the connection to every chat the user is a member of. The client
+// uses this signal to re-sync via GET /chats/unread.
+type ReadyPayload struct {
+	ChatIDs []string `json:"chat_ids"`
+}
+
+// ChatReadPayload is the payload for "chat.read" events. Lets other members
+// see live read receipts and lets the same user's other devices clear the
+// unread badge.
+type ChatReadPayload struct {
+	UserID            uuid.UUID `json:"user_id"`
+	LastReadMessageID uuid.UUID `json:"last_read_message_id"`
+}
+
 // Event type constants.
 const (
 	EventMessageCreated = "message.created"
 	EventMessageDeleted = "message.deleted"
-	EventSubscribed     = "subscribed"
-	EventUnsubscribed   = "unsubscribed"
+	EventChatRead       = "chat.read"
+	EventReady          = "ready"
 	EventError          = "error"
 )

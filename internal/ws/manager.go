@@ -256,7 +256,13 @@ func (m *Manager) sendToUserConns(userID uuid.UUID, evt broadcaster.Event) {
 		select {
 		case uc.send <- evt:
 		default:
-			m.logger.Error().Str("userID", userID.String()).Msg("User send buffer full, dropping event")
+			// Outbound buffer full: close the socket so the client
+			// reconnects and re-syncs via GET /chats/unread. Dropping
+			// events would leave the client silently out of date.
+			m.logger.Error().
+				Str("userID", userID.String()).
+				Msg("User send buffer full, closing connection to force re-sync")
+			_ = uc.conn.Close()
 		}
 	}
 }

@@ -22,20 +22,30 @@ import (
 	"github.com/go-chi/jwtauth/v5"
 )
 
+// MembershipLookup returns the chat IDs a user is a member of. The /ws
+// endpoint calls this on connect to auto-subscribe the socket. The current
+// implementation is backed by chat_reads as a stand-in; swap for the
+// external membership API when it lands.
+type MembershipLookup interface {
+	ListChatIDsForUser(userID uuid.UUID) ([]uuid.UUID, error)
+}
+
 type Handler struct {
 	logger      *loggers.AppLogger
 	messageRepo msgRepo.MessageRepo
 	chatRepo    chatRepo.ChatRepo
-	wsManager *ws.Manager
-	tokenAuth *jwtauth.JWTAuth
+	membership  MembershipLookup
+	wsManager   *ws.Manager
+	tokenAuth   *jwtauth.JWTAuth
 }
 
-func NewHandler(logger *loggers.AppLogger, repo msgRepo.MessageRepo, chatRepo chatRepo.ChatRepo, secretKey string, wsManager *ws.Manager) *Handler {
+func NewHandler(logger *loggers.AppLogger, repo msgRepo.MessageRepo, chatRepo chatRepo.ChatRepo, membership MembershipLookup, secretKey string, wsManager *ws.Manager) *Handler {
 	tokenAuth := jwtauth.New("HS512", []byte(secretKey), nil)
 	return &Handler{
 		logger:      logger,
 		messageRepo: repo,
 		chatRepo:    chatRepo,
+		membership:  membership,
 		wsManager:   wsManager,
 		tokenAuth:   tokenAuth,
 	}
@@ -161,6 +171,10 @@ func (h *Handler) HandleMessages() {
 
 // --- Per-user WebSocket endpoint ---
 
+// HandleUserConnection upgrades to a per-user WebSocket, auto-subscribes the
+// socket to every chat the user is a member of, and emits a "ready" event
+// once subscriptions are in place. The inbound side accepts send_message /
+// delete_message actions, gated on existing membership.
 func (h *Handler) HandleUserConnection(w http.ResponseWriter, r *http.Request) {
 	if !h.authenticateRequest(w, r) {
 		common.ErrorResponse(w, http.StatusUnauthorized, common.ProblemDetails{
@@ -182,6 +196,16 @@ func (h *Handler) HandleUserConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	chatIDs, err := h.membership.ListChatIDsForUser(userID)
+	if err != nil {
+		h.logger.Error().Err(err).Str("userID", userID.String()).Msg("Failed to load chat memberships")
+		common.ErrorResponse(w, http.StatusInternalServerError, common.ProblemDetails{
+			Title:  "Internal Server Error",
+			Detail: "Failed to load chat memberships",
+		})
+		return
+	}
+
 	conn, err := h.wsManager.Upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("WebSocket upgrade failed")
@@ -193,6 +217,24 @@ func (h *Handler) HandleUserConnection(w http.ResponseWriter, r *http.Request) {
 
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	})
+
+	for _, chatID := range chatIDs {
+		h.wsManager.Subscribe(userID, chatID)
+	}
+
+	chatIDStrs := make([]string, len(chatIDs))
+	for i, c := range chatIDs {
+		chatIDStrs[i] = c.String()
+	}
+	readyPayload, err := json.Marshal(ws.ReadyPayload{ChatIDs: chatIDStrs})
+	if err != nil {
+		h.logger.Error().Err(err).Msg("Failed to marshal ready payload")
+		return
+	}
+	h.wsManager.SendToUser(userID, broadcaster.Event{
+		Type:    ws.EventReady,
+		Payload: readyPayload,
 	})
 
 	for {
@@ -211,13 +253,9 @@ func (h *Handler) HandleUserConnection(w http.ResponseWriter, r *http.Request) {
 		}
 
 		switch inbound.Action {
-		case "subscribe":
-			h.handleSubscribe(userID, inbound)
-		case "unsubscribe":
-			h.handleUnsubscribe(userID, inbound)
 		case "send_message", "delete_message":
 			if !h.wsManager.IsSubscribed(userID, inbound.ChatID) {
-				h.wsManager.SendErrorToUser(userID, "not subscribed to this chat")
+				h.wsManager.SendErrorToUser(userID, "not a member of this chat")
 				continue
 			}
 			h.wsManager.EnqueueInbound(ws.InboundEnvelope{UserID: userID, Payload: inbound})
@@ -225,32 +263,6 @@ func (h *Handler) HandleUserConnection(w http.ResponseWriter, r *http.Request) {
 			h.wsManager.SendErrorToUser(userID, "unknown action: "+inbound.Action)
 		}
 	}
-}
-
-func (h *Handler) handleSubscribe(userID uuid.UUID, inbound ws.WSInbound) {
-	if inbound.ChatID == uuid.Nil {
-		h.wsManager.SendErrorToUser(userID, "chat_id is required for subscribe")
-		return
-	}
-
-	h.wsManager.Subscribe(userID, inbound.ChatID)
-	h.wsManager.SendToUser(userID, broadcaster.Event{
-		Type:   ws.EventSubscribed,
-		ChatID: inbound.ChatID.String(),
-	})
-}
-
-func (h *Handler) handleUnsubscribe(userID uuid.UUID, inbound ws.WSInbound) {
-	if inbound.ChatID == uuid.Nil {
-		h.wsManager.SendErrorToUser(userID, "chat_id is required for unsubscribe")
-		return
-	}
-
-	h.wsManager.Unsubscribe(userID, inbound.ChatID)
-	h.wsManager.SendToUser(userID, broadcaster.Event{
-		Type:   ws.EventUnsubscribed,
-		ChatID: inbound.ChatID.String(),
-	})
 }
 
 func (h *Handler) HandleUserMessages() {
