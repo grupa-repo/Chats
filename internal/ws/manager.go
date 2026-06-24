@@ -1,11 +1,13 @@
 package ws
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
-	"time"
 
+	"github.com/HappYness-Project/chatApi/internal/broadcaster"
 	domain "github.com/HappYness-Project/chatApi/internal/message/domain"
 	"github.com/HappYness-Project/chatApi/loggers"
 	"github.com/google/uuid"
@@ -16,14 +18,14 @@ import (
 // to serialize writes (gorilla/websocket does not support concurrent writers).
 type UserConn struct {
 	conn   *websocket.Conn
-	send   chan WSOutbound
+	send   chan broadcaster.Event
 	userID uuid.UUID
 }
 
 func newUserConn(userID uuid.UUID, conn *websocket.Conn) *UserConn {
 	uc := &UserConn{
 		conn:   conn,
-		send:   make(chan WSOutbound, 64),
+		send:   make(chan broadcaster.Event, 64),
 		userID: userID,
 	}
 	go uc.writePump()
@@ -32,8 +34,8 @@ func newUserConn(userID uuid.UUID, conn *websocket.Conn) *UserConn {
 
 func (uc *UserConn) writePump() {
 	defer uc.conn.Close()
-	for msg := range uc.send {
-		if err := uc.conn.WriteJSON(msg); err != nil {
+	for evt := range uc.send {
+		if err := uc.conn.WriteJSON(evt); err != nil {
 			return
 		}
 	}
@@ -48,25 +50,26 @@ type Manager struct {
 	Clients   map[uuid.UUID][]*websocket.Conn
 	Broadcast chan domain.Message
 
-	// Per-user connection tracking
-	userConns         map[uuid.UUID][]*UserConn
-	chatSubscribers   map[uuid.UUID]map[uuid.UUID]struct{} // chatID → set of userIDs
-	userSubscriptions map[uuid.UUID]map[uuid.UUID]struct{} // userID → set of chatIDs
-	Inbound           chan InboundEnvelope
+	// Per-user connection tracking. The broadcaster owns topic→handler
+	// routing; Manager keeps only the per-(user,chat) unsubscribe funcs
+	// so it can release them on Unsubscribe / RemoveUserConn.
+	userConns      map[uuid.UUID][]*UserConn
+	userChatUnsubs map[uuid.UUID]map[uuid.UUID]func()
+	Inbound        chan InboundEnvelope
 
-	Upgrader websocket.Upgrader
-	mutex    sync.RWMutex
-	logger   *loggers.AppLogger
+	Upgrader    websocket.Upgrader
+	mutex       sync.RWMutex
+	logger      *loggers.AppLogger
+	broadcaster broadcaster.Broadcaster
 }
 
-func NewManager(logger *loggers.AppLogger) *Manager {
+func NewManager(logger *loggers.AppLogger, b broadcaster.Broadcaster) *Manager {
 	return &Manager{
-		Clients:           make(map[uuid.UUID][]*websocket.Conn),
-		Broadcast:         make(chan domain.Message, 256),
-		userConns:         make(map[uuid.UUID][]*UserConn),
-		chatSubscribers:   make(map[uuid.UUID]map[uuid.UUID]struct{}),
-		userSubscriptions: make(map[uuid.UUID]map[uuid.UUID]struct{}),
-		Inbound:           make(chan InboundEnvelope, 256),
+		Clients:        make(map[uuid.UUID][]*websocket.Conn),
+		Broadcast:      make(chan domain.Message, 256),
+		userConns:      make(map[uuid.UUID][]*UserConn),
+		userChatUnsubs: make(map[uuid.UUID]map[uuid.UUID]func()),
+		Inbound:        make(chan InboundEnvelope, 256),
 		Upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -74,7 +77,8 @@ func NewManager(logger *loggers.AppLogger) *Manager {
 				return true
 			},
 		},
-		logger: logger,
+		logger:      logger,
+		broadcaster: b,
 	}
 }
 
@@ -141,8 +145,7 @@ func (m *Manager) AddUserConn(userID uuid.UUID, conn *websocket.Conn) *UserConn 
 
 func (m *Manager) RemoveUserConn(userID uuid.UUID, uc *UserConn) {
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
+	var unsubs []func()
 	conns := m.userConns[userID]
 	for i, c := range conns {
 		if c == uc {
@@ -152,32 +155,43 @@ func (m *Manager) RemoveUserConn(userID uuid.UUID, uc *UserConn) {
 	}
 	if len(m.userConns[userID]) == 0 {
 		delete(m.userConns, userID)
-		for chatID := range m.userSubscriptions[userID] {
-			delete(m.chatSubscribers[chatID], userID)
-			if len(m.chatSubscribers[chatID]) == 0 {
-				delete(m.chatSubscribers, chatID)
-			}
+		for _, unsub := range m.userChatUnsubs[userID] {
+			unsubs = append(unsubs, unsub)
 		}
-		delete(m.userSubscriptions, userID)
+		delete(m.userChatUnsubs, userID)
+	}
+	m.mutex.Unlock()
+
+	for _, unsub := range unsubs {
+		unsub()
 	}
 
 	uc.Close()
 	m.logger.Info().Str("userID", userID.String()).Msg("User connection removed")
 }
 
+// Subscribe registers user for chat events via the broadcaster. Idempotent:
+// re-subscribing the same (user, chat) is a no-op.
 func (m *Manager) Subscribe(userID, chatID uuid.UUID) {
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	if m.chatSubscribers[chatID] == nil {
-		m.chatSubscribers[chatID] = make(map[uuid.UUID]struct{})
+	if m.userChatUnsubs[userID] == nil {
+		m.userChatUnsubs[userID] = make(map[uuid.UUID]func())
 	}
-	m.chatSubscribers[chatID][userID] = struct{}{}
-
-	if m.userSubscriptions[userID] == nil {
-		m.userSubscriptions[userID] = make(map[uuid.UUID]struct{})
+	if _, exists := m.userChatUnsubs[userID][chatID]; exists {
+		m.mutex.Unlock()
+		return
 	}
-	m.userSubscriptions[userID][chatID] = struct{}{}
+	// Reserve the slot so a concurrent Subscribe doesn't double-register.
+	m.userChatUnsubs[userID][chatID] = func() {}
+	m.mutex.Unlock()
+
+	unsub := m.broadcaster.Subscribe(broadcaster.ChatTopic(chatID), func(evt broadcaster.Event) {
+		m.sendToUserConns(userID, evt)
+	})
+
+	m.mutex.Lock()
+	m.userChatUnsubs[userID][chatID] = unsub
+	m.mutex.Unlock()
 
 	m.logger.Info().
 		Str("userID", userID.String()).
@@ -187,16 +201,17 @@ func (m *Manager) Subscribe(userID, chatID uuid.UUID) {
 
 func (m *Manager) Unsubscribe(userID, chatID uuid.UUID) {
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	delete(m.chatSubscribers[chatID], userID)
-	if len(m.chatSubscribers[chatID]) == 0 {
-		delete(m.chatSubscribers, chatID)
+	unsub, ok := m.userChatUnsubs[userID][chatID]
+	if ok {
+		delete(m.userChatUnsubs[userID], chatID)
+		if len(m.userChatUnsubs[userID]) == 0 {
+			delete(m.userChatUnsubs, userID)
+		}
 	}
+	m.mutex.Unlock()
 
-	delete(m.userSubscriptions[userID], chatID)
-	if len(m.userSubscriptions[userID]) == 0 {
-		delete(m.userSubscriptions, userID)
+	if unsub != nil {
+		unsub()
 	}
 
 	m.logger.Info().
@@ -208,31 +223,29 @@ func (m *Manager) Unsubscribe(userID, chatID uuid.UUID) {
 func (m *Manager) IsSubscribed(userID, chatID uuid.UUID) bool {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-	if subs, ok := m.userSubscriptions[userID]; ok {
+	if subs, ok := m.userChatUnsubs[userID]; ok {
 		_, subscribed := subs[chatID]
 		return subscribed
 	}
 	return false
 }
 
-func (m *Manager) SendToChat(chatID uuid.UUID, msg WSOutbound) {
-	m.mutex.RLock()
-	subscribers := make([]uuid.UUID, 0, len(m.chatSubscribers[chatID]))
-	for uid := range m.chatSubscribers[chatID] {
-		subscribers = append(subscribers, uid)
+// Publish fans out an event to all subscribers of a chat via the broadcaster.
+// Use this from HTTP/WS write paths after a successful persistence.
+func (m *Manager) Publish(ctx context.Context, chatID uuid.UUID, evt broadcaster.Event) error {
+	if evt.ChatID == "" {
+		evt.ChatID = chatID.String()
 	}
-	m.mutex.RUnlock()
-
-	for _, uid := range subscribers {
-		m.sendToUserConns(uid, msg)
-	}
+	return m.broadcaster.Publish(ctx, broadcaster.ChatTopic(chatID), evt)
 }
 
-func (m *Manager) SendToUser(userID uuid.UUID, msg WSOutbound) {
-	m.sendToUserConns(userID, msg)
+// SendToUser enqueues an event directly to one user's connections (not via
+// the broadcaster). Use for connection-scoped events like acks and errors.
+func (m *Manager) SendToUser(userID uuid.UUID, evt broadcaster.Event) {
+	m.sendToUserConns(userID, evt)
 }
 
-func (m *Manager) sendToUserConns(userID uuid.UUID, msg WSOutbound) {
+func (m *Manager) sendToUserConns(userID uuid.UUID, evt broadcaster.Event) {
 	m.mutex.RLock()
 	conns := m.userConns[userID]
 	connsCopy := make([]*UserConn, len(conns))
@@ -241,9 +254,9 @@ func (m *Manager) sendToUserConns(userID uuid.UUID, msg WSOutbound) {
 
 	for _, uc := range connsCopy {
 		select {
-		case uc.send <- msg:
+		case uc.send <- evt:
 		default:
-			m.logger.Error().Str("userID", userID.String()).Msg("User send buffer full, dropping message")
+			m.logger.Error().Str("userID", userID.String()).Msg("User send buffer full, dropping event")
 		}
 	}
 }
@@ -257,9 +270,9 @@ func (m *Manager) EnqueueInbound(env InboundEnvelope) {
 }
 
 func (m *Manager) SendErrorToUser(userID uuid.UUID, errMsg string) {
-	m.SendToUser(userID, WSOutbound{
-		Event:     "error",
-		Error:     errMsg,
-		Timestamp: time.Now().UTC(),
+	payload, _ := json.Marshal(ErrorPayload{Error: errMsg})
+	m.SendToUser(userID, broadcaster.Event{
+		Type:    EventError,
+		Payload: payload,
 	})
 }

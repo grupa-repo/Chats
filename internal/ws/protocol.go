@@ -20,21 +20,37 @@ type InboundEnvelope struct {
 	Payload WSInbound
 }
 
-// --- Outbound (server → client) ---
+// --- Outbound payload shapes ---
+//
+// The wire envelope on the per-user /ws socket is broadcaster.Event
+// ({type, chat_id, payload}). These structs document the shape of the
+// type-specific payload field for each event type.
 
-type WSOutbound struct {
-	Event     string           `json:"event"`
-	ChatID    uuid.UUID        `json:"chat_id,omitempty"`
-	Message   *OutboundMessage `json:"message,omitempty"`
-	Error     string           `json:"error,omitempty"`
-	Timestamp time.Time        `json:"timestamp"`
+// MessagePayload is the payload for "message.created" events.
+type MessagePayload struct {
+	ID          uuid.UUID `json:"id"`
+	SenderID    uuid.UUID `json:"sender_id"`
+	Content     string    `json:"content"`
+	MessageType string    `json:"message_type"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
-type OutboundMessage struct {
-	ID          uuid.UUID  `json:"id"`
-	SenderID    uuid.UUID  `json:"sender_id"`
-	Content     string     `json:"content"`
-	MessageType string     `json:"message_type"`
-	CreatedAt   time.Time  `json:"created_at"`
-	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+// MessageDeletedPayload is the payload for "message.deleted" events.
+type MessageDeletedPayload struct {
+	ID        uuid.UUID `json:"id"`
+	DeletedAt time.Time `json:"deleted_at"`
 }
+
+// ErrorPayload is the payload for "error" events.
+type ErrorPayload struct {
+	Error string `json:"error"`
+}
+
+// Event type constants.
+const (
+	EventMessageCreated = "message.created"
+	EventMessageDeleted = "message.deleted"
+	EventSubscribed     = "subscribed"
+	EventUnsubscribed   = "unsubscribed"
+	EventError          = "error"
+)

@@ -11,6 +11,7 @@ import (
 	chatRoute "github.com/HappYness-Project/chatApi/internal/chat/route"
 	chatReadRepo "github.com/HappYness-Project/chatApi/internal/chatread/repository"
 	chatReadRoute "github.com/HappYness-Project/chatApi/internal/chatread/route"
+	"github.com/HappYness-Project/chatApi/internal/broadcaster"
 	messageRepo "github.com/HappYness-Project/chatApi/internal/message/repository"
 	messageRoute "github.com/HappYness-Project/chatApi/internal/message/route"
 	"github.com/HappYness-Project/chatApi/internal/ws"
@@ -56,7 +57,8 @@ func (s *ApiServer) Setup() *chi.Mux {
 	mux.Get("/", Home)
 	mux.Get("/health", Home)
 	mux.Get("/version", Version)
-	wsManager := ws.NewManager(s.logger)
+	bus := broadcaster.NewInProcess()
+	wsManager := ws.NewManager(s.logger, bus)
 	msgHandler := messageRoute.NewHandler(s.logger, *msgRepo, *chatRepo, s.secretKey, wsManager)
 	chatHandler := chatRoute.NewHandler(s.logger, *chatRepo, s.secretKey)
 	chatReadHandler := chatReadRoute.NewHandler(s.logger, *chatReadRepo)

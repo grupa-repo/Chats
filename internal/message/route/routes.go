@@ -1,12 +1,15 @@
 package route
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/HappYness-Project/chatApi/common"
+	"github.com/HappYness-Project/chatApi/internal/broadcaster"
 	domain "github.com/HappYness-Project/chatApi/internal/message/domain"
 	"github.com/HappYness-Project/chatApi/internal/ws"
 	"github.com/HappYness-Project/chatApi/loggers"
@@ -231,10 +234,9 @@ func (h *Handler) handleSubscribe(userID uuid.UUID, inbound ws.WSInbound) {
 	}
 
 	h.wsManager.Subscribe(userID, inbound.ChatID)
-	h.wsManager.SendToUser(userID, ws.WSOutbound{
-		Event:     "subscribed",
-		ChatID:    inbound.ChatID,
-		Timestamp: time.Now().UTC(),
+	h.wsManager.SendToUser(userID, broadcaster.Event{
+		Type:   ws.EventSubscribed,
+		ChatID: inbound.ChatID.String(),
 	})
 }
 
@@ -245,10 +247,9 @@ func (h *Handler) handleUnsubscribe(userID uuid.UUID, inbound ws.WSInbound) {
 	}
 
 	h.wsManager.Unsubscribe(userID, inbound.ChatID)
-	h.wsManager.SendToUser(userID, ws.WSOutbound{
-		Event:     "unsubscribed",
-		ChatID:    inbound.ChatID,
-		Timestamp: time.Now().UTC(),
+	h.wsManager.SendToUser(userID, broadcaster.Event{
+		Type:   ws.EventUnsubscribed,
+		ChatID: inbound.ChatID.String(),
 	})
 }
 
@@ -273,34 +274,45 @@ func (h *Handler) HandleUserMessages() {
 				h.logger.Error().Err(err).Msg("Unable to create a message")
 				continue
 			}
-			h.wsManager.SendToChat(msg.ChatID, ws.WSOutbound{
-				Event:  "message",
-				ChatID: msg.ChatID,
-				Message: &ws.OutboundMessage{
-					ID:          msg.ID,
-					SenderID:    msg.SenderID,
-					Content:     msg.Content,
-					MessageType: msg.MessageType,
-					CreatedAt:   msg.CreatedAt,
-				},
-				Timestamp: now,
+			payload, err := json.Marshal(ws.MessagePayload{
+				ID:          msg.ID,
+				SenderID:    msg.SenderID,
+				Content:     msg.Content,
+				MessageType: msg.MessageType,
+				CreatedAt:   msg.CreatedAt,
 			})
+			if err != nil {
+				h.logger.Error().Err(err).Msg("Failed to marshal message payload")
+				continue
+			}
+			if err := h.wsManager.Publish(context.Background(), msg.ChatID, broadcaster.Event{
+				Type:    ws.EventMessageCreated,
+				ChatID:  msg.ChatID.String(),
+				Payload: payload,
+			}); err != nil {
+				h.logger.Error().Err(err).Msg("Failed to publish message.created")
+			}
 
 		case "delete_message":
 			if err := h.messageRepo.SoftDelete(env.Payload.MessageID, env.UserID); err != nil {
 				h.logger.Error().Err(err).Str("messageID", env.Payload.MessageID.String()).Msg("Failed to delete message")
 				continue
 			}
-			deletedAt := time.Now().UTC()
-			h.wsManager.SendToChat(env.Payload.ChatID, ws.WSOutbound{
-				Event:  "message_deleted",
-				ChatID: env.Payload.ChatID,
-				Message: &ws.OutboundMessage{
-					ID:        env.Payload.MessageID,
-					DeletedAt: &deletedAt,
-				},
-				Timestamp: deletedAt,
+			payload, err := json.Marshal(ws.MessageDeletedPayload{
+				ID:        env.Payload.MessageID,
+				DeletedAt: time.Now().UTC(),
 			})
+			if err != nil {
+				h.logger.Error().Err(err).Msg("Failed to marshal delete payload")
+				continue
+			}
+			if err := h.wsManager.Publish(context.Background(), env.Payload.ChatID, broadcaster.Event{
+				Type:    ws.EventMessageDeleted,
+				ChatID:  env.Payload.ChatID.String(),
+				Payload: payload,
+			}); err != nil {
+				h.logger.Error().Err(err).Msg("Failed to publish message.deleted")
+			}
 		}
 	}
 }
