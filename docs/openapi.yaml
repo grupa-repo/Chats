@@ -1,0 +1,738 @@
+openapi: 3.0.3
+info:
+  title: HappYness Chat API
+  description: |
+    Real-time chat backend for the HappYness platform. Exposes REST endpoints for
+    chat/message/read-marker management and two WebSocket endpoints for live
+    delivery. JWT (HS512) auth is required for `/api/**` REST routes and for both
+    WebSocket endpoints.
+
+    See `WebSocket protocol` at the bottom of this document for the per-user `/api/ws`
+    event envelope and the per-chat `/api/chats/{chatID}/ws` legacy stream.
+  version: "1.0.0"
+  contact:
+    name: HappYness Project
+    url: https://github.com/HappYness-Project/chatApi
+servers:
+  - url: http://localhost:8070
+    description: Local development (docker-compose)
+  - url: https://{host}
+    description: Deployed environment
+    variables:
+      host:
+        default: chats.example.com
+
+tags:
+  - name: System
+    description: Health/version probes (no auth)
+  - name: Chats
+    description: Chat lifecycle and lookup
+  - name: Messages
+    description: Message history
+  - name: Chat Reads
+    description: Per-user read markers and unread counts
+  - name: WebSocket
+    description: Real-time channels (documented for reference; not invoked via OpenAPI)
+
+security:
+  - bearerAuth: []
+
+paths:
+  /:
+    get:
+      tags: [System]
+      summary: Service home / health
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HomeResponse"
+
+  /health:
+    get:
+      tags: [System]
+      summary: Health check (alias of `/`)
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HomeResponse"
+
+  /ping:
+    get:
+      tags: [System]
+      summary: Lightweight heartbeat
+      description: Returns 200 with body `.` — provided by chi's Heartbeat middleware.
+      security: []
+      responses:
+        "200":
+          description: Pong
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "."
+
+  /version:
+    get:
+      tags: [System]
+      summary: Deployed version metadata
+      security: []
+      responses:
+        "200":
+          description: Build/runtime metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionResponse"
+
+  /api/chats:
+    post:
+      tags: [Chats]
+      summary: Create a chat
+      description: |
+        Creates a chat of type `private`, `group`, or `container`.
+        - `group` chats require `usergroup_id` and must NOT include `container_id`.
+        - `container` chats require `container_id` and must NOT include `usergroup_id`.
+        - `private` chats must include neither.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateChatRequest"
+            examples:
+              group:
+                value:
+                  type: group
+                  usergroup_id: 42
+              container:
+                value:
+                  type: container
+                  container_id: 7f6c0a5e-2b1a-7a3c-bbbb-1234567890ab
+              private:
+                value:
+                  type: private
+      responses:
+        "201":
+          description: Chat created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Chat"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/chats/{chatID}:
+    parameters:
+      - $ref: "#/components/parameters/ChatIDPath"
+    get:
+      tags: [Chats]
+      summary: Get chat by ID
+      responses:
+        "200":
+          description: Chat found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Chat"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      tags: [Chats]
+      summary: Delete chat by ID
+      responses:
+        "204":
+          description: Chat deleted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/user-groups/{groupID}/chat:
+    parameters:
+      - $ref: "#/components/parameters/GroupIDPath"
+    get:
+      tags: [Chats]
+      summary: Get chat associated with a user group
+      responses:
+        "200":
+          description: Chat found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Chat"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      tags: [Chats]
+      summary: Delete chat associated with a user group
+      responses:
+        "204":
+          description: Chat deleted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/containers/{containerID}/chat:
+    parameters:
+      - $ref: "#/components/parameters/ContainerIDPath"
+    get:
+      tags: [Chats]
+      summary: Get chat associated with a container
+      responses:
+        "200":
+          description: Chat found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Chat"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/chats/{chatID}/messages:
+    parameters:
+      - $ref: "#/components/parameters/ChatIDPath"
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 1, default: 120 }
+        description: Maximum number of messages to return.
+      - in: query
+        name: offset
+        schema: { type: integer, minimum: 0, default: 0 }
+        description: Number of messages to skip for pagination.
+    get:
+      tags: [Messages]
+      summary: List messages for a chat
+      responses:
+        "200":
+          description: Messages page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagesPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/chats/{chatID}/read:
+    parameters:
+      - $ref: "#/components/parameters/ChatIDPath"
+    post:
+      tags: [Chat Reads]
+      summary: Mark chat as read up to a message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkReadRequest"
+      responses:
+        "200":
+          description: Read marker upserted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatRead"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    get:
+      tags: [Chat Reads]
+      summary: Get the caller's read marker for a chat
+      responses:
+        "200":
+          description: Read marker
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatRead"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/chats/{chatID}/unread-count:
+    parameters:
+      - $ref: "#/components/parameters/ChatIDPath"
+    get:
+      tags: [Chat Reads]
+      summary: Unread count for the caller in a chat
+      responses:
+        "200":
+          description: Unread count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnreadCountResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/chats/unread:
+    get:
+      tags: [Chat Reads]
+      summary: Unread counts across chats
+      description: |
+        Returns unread counts for every chat the caller participates in (or for the
+        explicit subset provided). Pass `chat_id` repeatedly or a comma-separated
+        `chat_ids` to scope the response.
+      parameters:
+        - in: query
+          name: chat_id
+          schema:
+            type: array
+            items: { type: string, format: uuid }
+          style: form
+          explode: true
+          description: Repeated query parameter; can be combined with `chat_ids`.
+        - in: query
+          name: chat_ids
+          schema: { type: string }
+          description: Comma-separated UUID list (e.g. `id1,id2`).
+      responses:
+        "200":
+          description: Unread list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnreadListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/chats/reads:
+    get:
+      tags: [Chat Reads]
+      summary: List all the caller's chat read markers
+      responses:
+        "200":
+          description: Read markers
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      tags: [Chat Reads]
+      summary: Bulk-upsert chat read markers
+      description: Maximum of 200 entries per request; `chat_id` values must be unique.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkMarkReadRequest"
+      responses:
+        "200":
+          description: Read markers after upsert
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadsListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/ws:
+    get:
+      tags: [WebSocket]
+      summary: Per-user WebSocket (HTTP upgrade)
+      description: |
+        Upgrades the connection to a WebSocket scoped to the authenticated user.
+        On connect, the server auto-subscribes the socket to every chat the user is
+        a member of and emits a `ready` event listing those chat IDs.
+
+        **Auth**: the JWT must be passed as a `?token=` query parameter — the upgrade
+        request itself is not run through the JWT middleware.
+
+        See the `WSInbound`, `WSEventEnvelope`, and `*Payload` schemas for the wire
+        format. Inbound actions: `send_message`, `delete_message`. Outbound event
+        types: `message.created`, `message.deleted`, `chat.read`, `ready`, `error`.
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+          description: JWT (HS512) signed with the server's secret.
+      responses:
+        "101":
+          description: Switching Protocols — WebSocket established
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/chats/{chatID}/ws:
+    get:
+      tags: [WebSocket]
+      summary: Per-chat WebSocket (legacy)
+      description: |
+        Upgrades to a WebSocket dedicated to a single chat. Prefer `/api/ws` for new
+        clients. The server reads `entity.Message` frames from the client and
+        broadcasts them to other subscribers of the chat.
+
+        **Auth**: pass JWT as `?token=` query parameter.
+      parameters:
+        - $ref: "#/components/parameters/ChatIDPath"
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        "101":
+          description: Switching Protocols — WebSocket established
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        HS512 JWT issued by the platform auth service. The token's `nameid` (or
+        `sub`) claim must be a UUID identifying the user. Required for all
+        `/api/**` REST routes. WebSocket endpoints accept the token as
+        `?token=` instead of an `Authorization` header.
+
+  parameters:
+    ChatIDPath:
+      in: path
+      name: chatID
+      required: true
+      schema: { type: string, format: uuid }
+      description: Chat UUID (v7).
+    GroupIDPath:
+      in: path
+      name: groupID
+      required: true
+      schema: { type: integer }
+      description: External user-group integer ID.
+    ContainerIDPath:
+      in: path
+      name: containerID
+      required: true
+      schema: { type: string, format: uuid }
+      description: External container UUID.
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ProblemDetails" }
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ProblemDetails" }
+    NotFound:
+      description: Resource not found
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ProblemDetails" }
+    InternalError:
+      description: Unexpected server error
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ProblemDetails" }
+
+  schemas:
+    HomeResponse:
+      type: object
+      properties:
+        status: { type: string, example: active }
+        message: { type: string, example: Message Service server }
+        version: { type: string, example: dev }
+      required: [status, message, version]
+
+    VersionResponse:
+      type: object
+      properties:
+        service: { type: string, example: chats }
+        version: { type: string, example: dev }
+        env: { type: string, example: local }
+      required: [service, version, env]
+
+    ProblemDetails:
+      type: object
+      description: RFC 7807-style problem details (Content-Type `application/problem+json`).
+      properties:
+        type: { type: string }
+        title: { type: string }
+        error_code: { type: string }
+        detail: { type: string }
+        instance: { type: string }
+      required: [title, error_code]
+
+    ChatType:
+      type: string
+      enum: [private, group, container]
+
+    Chat:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type: { $ref: "#/components/schemas/ChatType" }
+        usergroup_id:
+          type: integer
+          nullable: true
+        container_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at: { type: string, format: date-time }
+      required: [id, type, created_at]
+
+    CreateChatRequest:
+      type: object
+      properties:
+        type:
+          $ref: "#/components/schemas/ChatType"
+        usergroup_id:
+          type: integer
+          nullable: true
+        container_id:
+          type: string
+          format: uuid
+          nullable: true
+        user_id:
+          type: string
+          description: Optional initial participant (UUID). Currently informational.
+      required: [type]
+
+    Message:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        chat_id: { type: string, format: uuid }
+        sender_id: { type: string, format: uuid }
+        content: { type: string }
+        message_type: { type: string, example: text }
+        created_at: { type: string, format: date-time }
+        read_status: { type: boolean }
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+        deleted_by:
+          type: string
+          format: uuid
+          nullable: true
+      required: [id, chat_id, sender_id, content, message_type, created_at, read_status]
+
+    MessagesPage:
+      type: object
+      properties:
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/Message" }
+        count: { type: integer }
+      required: [messages, count]
+
+    ChatRead:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        chat_id: { type: string, format: uuid }
+        last_read_message_id:
+          type: string
+          format: uuid
+          nullable: true
+        last_read_at: { type: string, format: date-time }
+      required: [user_id, chat_id, last_read_at]
+
+    MarkReadRequest:
+      type: object
+      properties:
+        last_read_message_id: { type: string, format: uuid }
+      required: [last_read_message_id]
+
+    BulkMarkReadItem:
+      type: object
+      properties:
+        chat_id: { type: string, format: uuid }
+        last_read_message_id: { type: string, format: uuid }
+      required: [chat_id, last_read_message_id]
+
+    BulkMarkReadRequest:
+      type: object
+      properties:
+        reads:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { $ref: "#/components/schemas/BulkMarkReadItem" }
+      required: [reads]
+
+    UnreadEntry:
+      type: object
+      properties:
+        chat_id: { type: string, format: uuid }
+        count: { type: integer }
+        last_message_at:
+          type: string
+          format: date-time
+          nullable: true
+      required: [chat_id, count]
+
+    UnreadCountResponse:
+      type: object
+      properties:
+        chat_id: { type: string, format: uuid }
+        count: { type: integer }
+      required: [chat_id, count]
+
+    UnreadListResponse:
+      type: object
+      properties:
+        chats:
+          type: array
+          items: { $ref: "#/components/schemas/UnreadEntry" }
+      required: [chats]
+
+    ReadsListResponse:
+      type: object
+      properties:
+        reads:
+          type: array
+          items: { $ref: "#/components/schemas/ChatRead" }
+      required: [reads]
+
+    # ----- WebSocket wire shapes (documented for consumers) -----
+
+    WSInbound:
+      type: object
+      description: Frame sent by the client on `/api/ws`.
+      properties:
+        action:
+          type: string
+          enum: [send_message, delete_message]
+        chat_id: { type: string, format: uuid }
+        content: { type: string }
+        message_id: { type: string, format: uuid }
+      required: [action, chat_id]
+
+    WSEventType:
+      type: string
+      enum: [message.created, message.deleted, chat.read, ready, error]
+
+    WSEventEnvelope:
+      type: object
+      description: Outbound frame on `/api/ws`. `payload` shape depends on `type`.
+      properties:
+        type: { $ref: "#/components/schemas/WSEventType" }
+        chat_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Present on chat-scoped events; omitted on `ready`/`error`.
+        payload:
+          oneOf:
+            - $ref: "#/components/schemas/MessagePayload"
+            - $ref: "#/components/schemas/MessageDeletedPayload"
+            - $ref: "#/components/schemas/ChatReadPayload"
+            - $ref: "#/components/schemas/ReadyPayload"
+            - $ref: "#/components/schemas/ErrorPayload"
+      required: [type, payload]
+
+    MessagePayload:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        sender_id: { type: string, format: uuid }
+        content: { type: string }
+        message_type: { type: string, example: text }
+        created_at: { type: string, format: date-time }
+      required: [id, sender_id, content, message_type, created_at]
+
+    MessageDeletedPayload:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        deleted_at: { type: string, format: date-time }
+      required: [id, deleted_at]
+
+    ChatReadPayload:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        last_read_message_id: { type: string, format: uuid }
+      required: [user_id, last_read_message_id]
+
+    ReadyPayload:
+      type: object
+      properties:
+        chat_ids:
+          type: array
+          items: { type: string, format: uuid }
+      required: [chat_ids]
+
+    ErrorPayload:
+      type: object
+      properties:
+        error: { type: string }
+      required: [error]

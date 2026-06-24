@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/HappYness-Project/chatApi/common"
+	"github.com/HappYness-Project/chatApi/docs"
 	chatRepo "github.com/HappYness-Project/chatApi/internal/chat/repository"
 	chatRoute "github.com/HappYness-Project/chatApi/internal/chat/route"
 	chatReadRepo "github.com/HappYness-Project/chatApi/internal/chatread/repository"
@@ -57,6 +58,7 @@ func (s *ApiServer) Setup() *chi.Mux {
 	mux.Get("/", Home)
 	mux.Get("/health", Home)
 	mux.Get("/version", Version)
+	docs.RegisterRoutes(mux)
 	bus := broadcaster.NewInProcess()
 	wsManager := ws.NewManager(s.logger, bus)
 	msgHandler := messageRoute.NewHandler(s.logger, *msgRepo, *chatRepo, chatReadRepo, s.secretKey, wsManager)
