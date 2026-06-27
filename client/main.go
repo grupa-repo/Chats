@@ -27,15 +27,31 @@ const (
 	baseURL = "http://localhost:8070"
 )
 
-type Message struct {
-	ID          string     `json:"id"`
-	ChatID      string     `json:"chat_id"`
-	SenderID    string     `json:"sender_id"`
-	Content     string     `json:"content"`
-	MessageType string     `json:"message_type"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ReadStatus  bool       `json:"read_status"`
-	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+type envelope struct {
+	Type    string          `json:"type"`
+	ChatID  string          `json:"chat_id,omitempty"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+type messagePayload struct {
+	ID          string    `json:"id"`
+	SenderID    string    `json:"sender_id"`
+	Content     string    `json:"content"`
+	MessageType string    `json:"message_type"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type messageDeletedPayload struct {
+	ID        string    `json:"id"`
+	DeletedAt time.Time `json:"deleted_at"`
+}
+
+type readyPayload struct {
+	ChatIDs []string `json:"chat_ids"`
+}
+
+type errorPayload struct {
+	Error string `json:"error"`
 }
 
 func newUUID() string {
@@ -125,7 +141,7 @@ func main() {
 	u := url.URL{
 		Scheme:   "ws",
 		Host:     "localhost:8070",
-		Path:     fmt.Sprintf("/api/chats/%s/ws", chatID),
+		Path:     "/api/ws",
 		RawQuery: "token=" + token,
 	}
 
@@ -135,7 +151,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	fmt.Printf("Connected as %s to chat %s\n", username, chatID)
+	fmt.Printf("Connected as %s, will send to chat %s\n", username, chatID)
 	fmt.Println("Type a message and press Enter to send. Type 'quit' or Ctrl+C to exit.")
 
 	interrupt := make(chan os.Signal, 1)
@@ -145,17 +161,33 @@ func main() {
 	go func() {
 		defer close(done)
 		for {
-			var msg Message
-			if err := conn.ReadJSON(&msg); err != nil {
+			var env envelope
+			if err := conn.ReadJSON(&env); err != nil {
 				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 					log.Println("Read error:", err)
 				}
 				return
 			}
-			if msg.DeletedAt != nil {
-				fmt.Printf("\r[%s] <message %s deleted>\n> ", msg.CreatedAt.Format("15:04:05"), msg.ID)
-			} else {
-				fmt.Printf("\r[%s] %s: %s\n> ", msg.CreatedAt.Format("15:04:05"), msg.SenderID, msg.Content)
+			if env.ChatID != "" && env.ChatID != chatID {
+				continue
+			}
+			switch env.Type {
+			case "ready":
+				var p readyPayload
+				_ = json.Unmarshal(env.Payload, &p)
+				fmt.Printf("\rReady — subscribed to %d chat(s)\n> ", len(p.ChatIDs))
+			case "message.created":
+				var p messagePayload
+				_ = json.Unmarshal(env.Payload, &p)
+				fmt.Printf("\r[%s] %s: %s\n> ", p.CreatedAt.Format("15:04:05"), p.SenderID, p.Content)
+			case "message.deleted":
+				var p messageDeletedPayload
+				_ = json.Unmarshal(env.Payload, &p)
+				fmt.Printf("\r[%s] <message %s deleted>\n> ", p.DeletedAt.Format("15:04:05"), p.ID)
+			case "error":
+				var p errorPayload
+				_ = json.Unmarshal(env.Payload, &p)
+				fmt.Printf("\rserver error: %s\n> ", p.Error)
 			}
 		}
 	}()
@@ -174,7 +206,12 @@ func main() {
 				fmt.Print("> ")
 				continue
 			}
-			if err := conn.WriteJSON(map[string]string{"content": text}); err != nil {
+			frame := map[string]string{
+				"action":  "send_message",
+				"chat_id": chatID,
+				"content": text,
+			}
+			if err := conn.WriteJSON(frame); err != nil {
 				log.Println("Write error:", err)
 				return
 			}

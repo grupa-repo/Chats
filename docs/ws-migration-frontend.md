@@ -2,13 +2,11 @@
 
 ## What changed
 
-The chat service now exposes a **per-user WebSocket** that auto-subscribes to every chat the user is a member of. The old per-chat socket is deprecated but still up during transition.
+The chat service now exposes a **per-user WebSocket** that auto-subscribes to every chat the user is a member of. The old per-chat socket (`/api/chats/{chatID}/ws`) has been **removed** — deployed clients must be on the new code path before the backend rolls out.
 
-## Endpoints
+## Endpoint
 
-| Old (deprecated) | New |
-|---|---|
-| `GET /api/chats/{chatID}/ws?token=<jwt>` | `GET /api/ws?token=<jwt>` |
+`GET /api/ws?token=<jwt>`
 
 - One socket per logged-in user (multi-tab/multi-device supported — open as many as you want).
 - JWT is read from the **query string**, same as before.
@@ -104,10 +102,10 @@ There is **no event replay**. The HTTP re-sync is the source of truth after reco
 
 The membership lookup that drives auto-subscribe is currently inferred from `chat_reads` + sent messages. A user added to a chat who has never read or posted in it won't appear subscribed until they do. This will be replaced by an authoritative external membership API in a follow-up — no client change required when that lands.
 
-## Migration order suggested
+## Migration order (historical)
 
 1. Add the new `/api/ws` connection alongside the old per-chat sockets.
 2. Wire `message.created` into the unread badge.
 3. Wire `chat.read` into "clear badge across devices."
 4. Remove the per-chat WS code paths.
-5. Backend removes the deprecated `/api/chats/{chatID}/ws` endpoint.
+5. Backend removes the deprecated `/api/chats/{chatID}/ws` endpoint. ✅ done

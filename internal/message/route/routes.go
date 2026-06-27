@@ -3,7 +3,6 @@ package route
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -16,7 +15,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
-	chatRepo "github.com/HappYness-Project/chatApi/internal/chat/repository"
 	msgRepo "github.com/HappYness-Project/chatApi/internal/message/repository"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/jwtauth/v5"
@@ -33,18 +31,16 @@ type MembershipLookup interface {
 type Handler struct {
 	logger      *loggers.AppLogger
 	messageRepo msgRepo.MessageRepo
-	chatRepo    chatRepo.ChatRepo
 	membership  MembershipLookup
 	wsManager   *ws.Manager
 	tokenAuth   *jwtauth.JWTAuth
 }
 
-func NewHandler(logger *loggers.AppLogger, repo msgRepo.MessageRepo, chatRepo chatRepo.ChatRepo, membership MembershipLookup, secretKey string, wsManager *ws.Manager) *Handler {
+func NewHandler(logger *loggers.AppLogger, repo msgRepo.MessageRepo, membership MembershipLookup, secretKey string, wsManager *ws.Manager) *Handler {
 	tokenAuth := jwtauth.New("HS512", []byte(secretKey), nil)
 	return &Handler{
 		logger:      logger,
 		messageRepo: repo,
-		chatRepo:    chatRepo,
 		membership:  membership,
 		wsManager:   wsManager,
 		tokenAuth:   tokenAuth,
@@ -54,122 +50,6 @@ func NewHandler(logger *loggers.AppLogger, repo msgRepo.MessageRepo, chatRepo ch
 func (h *Handler) RegisterRoutes(router chi.Router) {
 	router.Get("/api/chats/{chatID}/messages", h.GetMessagesByChatID)
 }
-
-func (h *Handler) HandleConnectionsByChatID(w http.ResponseWriter, r *http.Request) {
-	if !h.authenticateRequest(w, r) {
-		common.ErrorResponse(w, http.StatusUnauthorized, common.ProblemDetails{
-			Title:     "Unauthorized",
-			ErrorCode: "AuthenticationFailure",
-			Detail:    "Invalid authentication token",
-		})
-		return
-	}
-
-	chatIDStr := chi.URLParam(r, "chatID")
-	if chatIDStr == "" {
-		h.logger.Error().Msg("chatID is required")
-		http.Error(w, "chatID is required", http.StatusBadRequest)
-		return
-	}
-
-	chatID := uuid.MustParse(chatIDStr)
-
-	tokenString := r.URL.Query().Get("token")
-	userID := h.extractUserIDFromToken(tokenString)
-
-	if userID == uuid.Nil {
-		h.logger.Error().Msg("Failed to extract valid user ID from token")
-		common.ErrorResponse(w, http.StatusUnauthorized, common.ProblemDetails{
-			Title:     "Unauthorized",
-			ErrorCode: "InvalidToken",
-			Detail:    "Could not extract user ID from token",
-		})
-		return
-	}
-
-	conn, err := h.wsManager.Upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		h.logger.Error().Err(err).Msg(err.Error())
-		return
-	}
-	defer h.wsManager.RemoveClient(chatID, conn)
-
-	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	})
-
-	h.wsManager.AddClient(chatID, conn)
-	chat, err := h.chatRepo.GetChatById(chatID)
-	if err != nil {
-		h.logger.Error().Err(err).Msg("Error occurred during getting chat by user group. " + err.Error())
-		return
-	}
-
-	for {
-		var msg domain.Message
-		err := conn.ReadJSON(&msg)
-		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				h.logger.Info().Msg("Client disconnected normally")
-				return
-			}
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				h.logger.Error().Err(err).Msg("Unexpected websocket close")
-				return
-			} else {
-				h.logger.Error().Err(err).Msg("Error reading websocket message")
-				continue
-			}
-		}
-
-		if msg.DeletedBy != nil && *msg.DeletedBy != uuid.Nil {
-			err := h.messageRepo.SoftDelete(msg.ID, userID)
-			if err != nil {
-				h.logger.Error().Err(err).Str("messageID", msg.ID.String()).Msg("Failed to delete message")
-				continue
-			}
-
-			h.logger.Info().Str("messageID", msg.ID.String()).Str("userID", userID.String()).Msg("Message deleted successfully")
-			deletedAt := time.Now().UTC()
-			deleteNotification := domain.Message{
-				ID:        msg.ID,
-				ChatID:    chat.Id,
-				DeletedAt: &deletedAt,
-			}
-			h.wsManager.SendToClients(deleteNotification, h.logger)
-			continue
-		}
-
-		if msg.Content == "" {
-			continue
-		}
-
-		msg.ChatID = chat.Id
-		msg.SenderID = userID
-		msg.CreatedAt = time.Now().UTC()
-		msg.MessageType = "text"
-
-		h.wsManager.BroadcastMessage(msg)
-	}
-}
-
-func (h *Handler) HandleMessages() {
-	for {
-		msg := <-h.wsManager.Broadcast
-		id, _ := uuid.NewV7()
-		msg.ID = id
-		if err := h.messageRepo.Create(msg); err != nil {
-			h.logger.Error().Err(err).Msg("Unable to create a message")
-			continue
-		}
-		fmt.Printf("Broadcasting message to %d clients\n", len(h.wsManager.Clients))
-		fmt.Printf("[ChatID:%s]|[SenderID:%s]|Message: %s\n", msg.ChatID, msg.SenderID, msg.Content)
-		fmt.Println("-------------------------------------------------------------")
-		h.wsManager.SendToClients(msg, h.logger)
-	}
-}
-
-// --- Per-user WebSocket endpoint ---
 
 // HandleUserConnection upgrades to a per-user WebSocket, auto-subscribes the
 // socket to every chat the user is a member of, and emits a "ready" event

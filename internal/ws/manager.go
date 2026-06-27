@@ -3,12 +3,10 @@ package ws
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"sync"
 
 	"github.com/HappYness-Project/chatApi/internal/broadcaster"
-	domain "github.com/HappYness-Project/chatApi/internal/message/domain"
 	"github.com/HappYness-Project/chatApi/loggers"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -46,10 +44,6 @@ func (uc *UserConn) Close() {
 }
 
 type Manager struct {
-	// Legacy per-chat connection tracking (kept for backward compat with old endpoint)
-	Clients   map[uuid.UUID][]*websocket.Conn
-	Broadcast chan domain.Message
-
 	// Per-user connection tracking. The broadcaster owns topic→handler
 	// routing; Manager keeps only the per-(user,chat) unsubscribe funcs
 	// so it can release them on Unsubscribe / RemoveUserConn.
@@ -65,8 +59,6 @@ type Manager struct {
 
 func NewManager(logger *loggers.AppLogger, b broadcaster.Broadcaster) *Manager {
 	return &Manager{
-		Clients:        make(map[uuid.UUID][]*websocket.Conn),
-		Broadcast:      make(chan domain.Message, 256),
 		userConns:      make(map[uuid.UUID][]*UserConn),
 		userChatUnsubs: make(map[uuid.UUID]map[uuid.UUID]func()),
 		Inbound:        make(chan InboundEnvelope, 256),
@@ -81,58 +73,6 @@ func NewManager(logger *loggers.AppLogger, b broadcaster.Broadcaster) *Manager {
 		broadcaster: b,
 	}
 }
-
-// --- Legacy per-chat methods (old endpoint) ---
-
-func (m *Manager) AddClient(chatID uuid.UUID, conn *websocket.Conn) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	m.Clients[chatID] = append(m.Clients[chatID], conn)
-	m.logger.Info().Str("chatID", chatID.String()).Msg("New client connected")
-}
-
-func (m *Manager) RemoveClient(chatID uuid.UUID, conn *websocket.Conn) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	conns := m.Clients[chatID]
-	for i, c := range conns {
-		if c == conn {
-			m.Clients[chatID] = append(conns[:i], conns[i+1:]...)
-			break
-		}
-	}
-	if len(m.Clients[chatID]) == 0 {
-		delete(m.Clients, chatID)
-	}
-	conn.Close()
-	m.logger.Info().Str("chatID", chatID.String()).Msg("Client disconnected")
-}
-
-func (m *Manager) BroadcastMessage(msg domain.Message) {
-	select {
-	case m.Broadcast <- msg:
-	default:
-		fmt.Println("Broadcast channel full, dropping message")
-	}
-}
-
-func (m *Manager) SendToClients(msg domain.Message, logger *loggers.AppLogger) {
-	m.mutex.RLock()
-	conns := m.Clients[msg.ChatID]
-	clientsCopy := make([]*websocket.Conn, len(conns))
-	copy(clientsCopy, conns)
-	m.mutex.RUnlock()
-
-	for _, client := range clientsCopy {
-		err := client.WriteJSON(msg)
-		if err != nil {
-			logger.Error().Err(err).Msg("Unable to write a message")
-			m.RemoveClient(msg.ChatID, client)
-		}
-	}
-}
-
-// --- Per-user connection methods (new endpoint) ---
 
 func (m *Manager) AddUserConn(userID uuid.UUID, conn *websocket.Conn) *UserConn {
 	uc := newUserConn(userID, conn)

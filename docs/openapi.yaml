@@ -3,12 +3,12 @@ info:
   title: HappYness Chat API
   description: |
     Real-time chat backend for the HappYness platform. Exposes REST endpoints for
-    chat/message/read-marker management and two WebSocket endpoints for live
-    delivery. JWT (HS512) auth is required for `/api/**` REST routes and for both
-    WebSocket endpoints.
+    chat/message/read-marker management and a per-user WebSocket endpoint for live
+    delivery. JWT (HS512) auth is required for `/api/**` REST routes and for the
+    WebSocket endpoint.
 
     See `WebSocket protocol` at the bottom of this document for the per-user `/api/ws`
-    event envelope and the per-chat `/api/chats/{chatID}/ws` legacy stream.
+    event envelope.
   version: "1.0.0"
   contact:
     name: HappYness Project
@@ -421,30 +421,6 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalError"
-
-  /api/chats/{chatID}/ws:
-    get:
-      tags: [WebSocket]
-      summary: Per-chat WebSocket (legacy)
-      description: |
-        Upgrades to a WebSocket dedicated to a single chat. Prefer `/api/ws` for new
-        clients. The server reads `entity.Message` frames from the client and
-        broadcasts them to other subscribers of the chat.
-
-        **Auth**: pass JWT as `?token=` query parameter.
-      parameters:
-        - $ref: "#/components/parameters/ChatIDPath"
-        - in: query
-          name: token
-          required: true
-          schema: { type: string }
-      responses:
-        "101":
-          description: Switching Protocols — WebSocket established
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
 
 components:
   securitySchemes:
