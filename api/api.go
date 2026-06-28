@@ -13,6 +13,7 @@ import (
 	chatReadRepo "github.com/HappYness-Project/chatApi/internal/chatread/repository"
 	chatReadRoute "github.com/HappYness-Project/chatApi/internal/chatread/route"
 	"github.com/HappYness-Project/chatApi/internal/broadcaster"
+	membershipRoute "github.com/HappYness-Project/chatApi/internal/membership/route"
 	messageRepo "github.com/HappYness-Project/chatApi/internal/message/repository"
 	messageRoute "github.com/HappYness-Project/chatApi/internal/message/route"
 	"github.com/HappYness-Project/chatApi/internal/ws"
@@ -25,21 +26,23 @@ import (
 )
 
 type ApiServer struct {
-	addr      string
-	secretKey string
-	db        *sql.DB
-	tokenAuth *jwtauth.JWTAuth
-	logger    *loggers.AppLogger
+	addr             string
+	secretKey        string
+	internalAPIToken string
+	db               *sql.DB
+	tokenAuth        *jwtauth.JWTAuth
+	logger           *loggers.AppLogger
 }
 
-func NewApiServer(addr string, secretKey string, db *sql.DB, logger *loggers.AppLogger) *ApiServer {
+func NewApiServer(addr string, secretKey string, internalAPIToken string, db *sql.DB, logger *loggers.AppLogger) *ApiServer {
 	tokenAuth := jwtauth.New("HS512", []byte(secretKey), nil)
 	return &ApiServer{
-		addr:      addr,
-		secretKey: secretKey,
-		db:        db,
-		tokenAuth: tokenAuth,
-		logger:    logger,
+		addr:             addr,
+		secretKey:        secretKey,
+		internalAPIToken: internalAPIToken,
+		db:               db,
+		tokenAuth:        tokenAuth,
+		logger:           logger,
 	}
 }
 
@@ -64,8 +67,10 @@ func (s *ApiServer) Setup() *chi.Mux {
 	msgHandler := messageRoute.NewHandler(s.logger, *msgRepo, chatReadRepo, s.secretKey, wsManager)
 	chatHandler := chatRoute.NewHandler(s.logger, *chatRepo, s.secretKey)
 	chatReadHandler := chatReadRoute.NewHandler(s.logger, *chatReadRepo, bus)
+	membershipHandler := membershipRoute.NewHandler(s.logger, wsManager, s.internalAPIToken)
 
 	mux.Get("/api/ws", msgHandler.HandleUserConnection)
+	membershipHandler.RegisterRoutes(mux)
 	mux.Group(func(r chi.Router) {
 		r.Use(jwtauth.Verifier(s.tokenAuth))
 		r.Use(jwtauth.Authenticator)

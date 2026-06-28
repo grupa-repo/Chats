@@ -121,3 +121,93 @@ func TestChatRead_AcrossDevices(t *testing.T) {
 	harness.MarkRead(t, cfg, alice.Token, chatID, mp.ID)
 	a2.Expect("chat.read", chatID.String(), 2*time.Second)
 }
+
+// TestResync_AddsLiveSubscriptionForNewChat covers the per-user WS bug where
+// a chat the user is added to *after* connect was silently dead until the next
+// reconnect. The membership service calls /api/internal/membership/resync;
+// the server must subscribe the live socket and emit a fresh ready.
+func TestResync_AddsLiveSubscriptionForNewChat(t *testing.T) {
+	cfg := harness.LoadCfg(t)
+	internalToken := harness.RequireInternalToken(t)
+
+	alice := harness.NewUser(t, cfg)
+	bob := harness.NewUser(t, cfg)
+	t.Cleanup(func() {
+		harness.CleanupUser(t, cfg, alice.ID)
+		harness.CleanupUser(t, cfg, bob.ID)
+	})
+
+	// Alice connects with no chats yet — initial ready should be empty of
+	// the chat we're about to create.
+	a := harness.Dial(t, cfg, alice)
+	defer a.Close()
+	aReady := a.ExpectReady(2 * time.Second)
+
+	// New chat, Bob joined, Alice deliberately NOT joined.
+	chatID := harness.CreateChat(t, cfg, bob.Token, "private")
+	harness.JoinChat(t, cfg, bob.ID, chatID)
+	require.NotContains(t, aReady, chatID.String())
+
+	b := harness.Dial(t, cfg, bob)
+	defer b.Close()
+	b.ExpectReady(2 * time.Second)
+
+	// Before resync: Bob sends, Alice's socket sees nothing.
+	b.SendMessage(chatID, "you can't see this yet")
+	a.ExpectNone(500 * time.Millisecond)
+
+	// Membership service notifies chats that Alice is now in the chat.
+	harness.Resync(t, cfg, internalToken, alice.ID, []uuid.UUID{chatID})
+
+	// Alice gets a fresh ready including the new chat.
+	aReady2 := a.ExpectReady(2 * time.Second)
+	require.Contains(t, aReady2, chatID.String())
+
+	// Now Bob's sends reach Alice on the same socket — no reconnect needed.
+	b.SendMessage(chatID, "now you can")
+	got := a.Expect("message.created", chatID.String(), 2*time.Second)
+	var mp messagePayload
+	require.NoError(t, json.Unmarshal(got.Payload, &mp))
+	require.Equal(t, "now you can", mp.Content)
+}
+
+// TestResync_RemovesLiveSubscription covers the removal direction: when the
+// membership service drops a chat from the user's list, the live socket must
+// stop receiving its events. Symmetric to the add path above.
+func TestResync_RemovesLiveSubscription(t *testing.T) {
+	cfg := harness.LoadCfg(t)
+	internalToken := harness.RequireInternalToken(t)
+
+	alice := harness.NewUser(t, cfg)
+	bob := harness.NewUser(t, cfg)
+	t.Cleanup(func() {
+		harness.CleanupUser(t, cfg, alice.ID)
+		harness.CleanupUser(t, cfg, bob.ID)
+	})
+
+	chatID := harness.CreateChat(t, cfg, bob.Token, "private")
+	harness.JoinChat(t, cfg, alice.ID, chatID)
+	harness.JoinChat(t, cfg, bob.ID, chatID)
+
+	a := harness.Dial(t, cfg, alice)
+	defer a.Close()
+	b := harness.Dial(t, cfg, bob)
+	defer b.Close()
+	require.Contains(t, a.ExpectReady(2*time.Second), chatID.String())
+	b.ExpectReady(2 * time.Second)
+
+	// Sanity: before resync, Alice receives Bob's message.
+	b.SendMessage(chatID, "before resync")
+	a.Expect("message.created", chatID.String(), 2*time.Second)
+
+	// Membership service removes Alice from the chat.
+	harness.Resync(t, cfg, internalToken, alice.ID, []uuid.UUID{})
+
+	// Fresh ready arrives with the chat gone.
+	aReady := a.ExpectReady(2 * time.Second)
+	require.NotContains(t, aReady, chatID.String())
+
+	// Bob sends — Alice's socket must not see it.
+	b.SendMessage(chatID, "after resync")
+	a.ExpectNone(500 * time.Millisecond)
+}

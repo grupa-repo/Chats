@@ -43,3 +43,15 @@ func LoadCfg(t *testing.T) Config {
 	}
 	return cfg
 }
+
+// RequireInternalToken returns the INTERNAL_API_TOKEN value from QA_INTERNAL_TOKEN
+// or skips the calling test if unset. Kept out of LoadCfg so that tests which
+// don't touch /api/internal/* still run when the token isn't provisioned.
+func RequireInternalToken(t *testing.T) string {
+	t.Helper()
+	tok := os.Getenv("QA_INTERNAL_TOKEN")
+	if tok == "" {
+		t.Skip("QA harness skipped — missing env: QA_INTERNAL_TOKEN")
+	}
+	return tok
+}

@@ -160,6 +160,61 @@ func (m *Manager) Unsubscribe(userID, chatID uuid.UUID) {
 		Msg("User unsubscribed from chat")
 }
 
+// ResyncUserSubscriptions reconciles the live subscription set for userID to
+// match chatIDs and emits a fresh ready frame to each of the user's open
+// connections. Intended for use by the membership service after it adds or
+// removes a user from a chat — without this the connection's subscription set
+// is frozen at connect time and events for newly-joined chats never arrive.
+// No-op when the user has no open connections.
+func (m *Manager) ResyncUserSubscriptions(userID uuid.UUID, chatIDs []uuid.UUID) {
+	m.mutex.RLock()
+	hasConn := len(m.userConns[userID]) > 0
+	current := make(map[uuid.UUID]struct{}, len(m.userChatUnsubs[userID]))
+	for c := range m.userChatUnsubs[userID] {
+		current[c] = struct{}{}
+	}
+	m.mutex.RUnlock()
+
+	if !hasConn {
+		return
+	}
+
+	desired := make(map[uuid.UUID]struct{}, len(chatIDs))
+	for _, c := range chatIDs {
+		desired[c] = struct{}{}
+	}
+
+	for c := range desired {
+		if _, exists := current[c]; !exists {
+			m.Subscribe(userID, c)
+		}
+	}
+	for c := range current {
+		if _, keep := desired[c]; !keep {
+			m.Unsubscribe(userID, c)
+		}
+	}
+
+	chatIDStrs := make([]string, 0, len(chatIDs))
+	for _, c := range chatIDs {
+		chatIDStrs = append(chatIDStrs, c.String())
+	}
+	payload, err := json.Marshal(ReadyPayload{ChatIDs: chatIDStrs})
+	if err != nil {
+		m.logger.Error().Err(err).Msg("Failed to marshal ready payload on resync")
+		return
+	}
+	m.SendToUser(userID, broadcaster.Event{
+		Type:    EventReady,
+		Payload: payload,
+	})
+
+	m.logger.Info().
+		Str("userID", userID.String()).
+		Int("chats", len(chatIDs)).
+		Msg("Resynced user subscriptions")
+}
+
 func (m *Manager) IsSubscribed(userID, chatID uuid.UUID) bool {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()

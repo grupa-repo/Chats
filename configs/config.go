@@ -23,6 +23,7 @@ type Env struct {
 
 	AccessTokenSecret  string `mapstructure:"ACCESS_TOKEN_SECRET"`
 	RefreshTokenSecret string `mapstructure:"REFRESH_TOKEN_SECRET"`
+	InternalAPIToken   string `mapstructure:"INTERNAL_API_TOKEN"`
 }
 
 func InitConfig(envString string) Env {
@@ -44,6 +45,7 @@ func InitConfig(envString string) Env {
 		env.DBPwd = os.Getenv("DB_PWD")
 		env.AccessTokenSecret = os.Getenv("ACCESS_TOKEN_SECRET")
 		env.RefreshTokenSecret = os.Getenv("ACCESS_TOKEN_SECRET")
+		env.InternalAPIToken = os.Getenv("INTERNAL_API_TOKEN")
 		return env
 	}
 	err := viper.ReadInConfig()

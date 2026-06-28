@@ -87,6 +87,35 @@ func ListUnread(t *testing.T, cfg Config, token string) map[uuid.UUID]int {
 	return counts
 }
 
+// Resync POSTs /api/internal/membership/resync as the membership service
+// would: shared-secret header, full chat-id list for the affected user.
+// Asserts 204 — the endpoint has no body to return.
+func Resync(t *testing.T, cfg Config, internalToken string, userID uuid.UUID, chatIDs []uuid.UUID) {
+	t.Helper()
+	ids := make([]string, len(chatIDs))
+	for i, c := range chatIDs {
+		ids[i] = c.String()
+	}
+	body, _ := json.Marshal(map[string]any{
+		"user_id":  userID.String(),
+		"chat_ids": ids,
+	})
+
+	req, err := http.NewRequest(http.MethodPost, cfg.BaseURL+"/api/internal/membership/resync", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Token", internalToken)
+
+	resp, err := httpClient.Do(req)
+	require.NoError(t, err, "resync")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("resync: %d: %s", resp.StatusCode, b)
+	}
+}
+
 func newReq(t *testing.T, method, url, token string, body []byte) *http.Request {
 	t.Helper()
 	var rdr io.Reader
