@@ -3,7 +3,7 @@ package repository
 import (
 	"database/sql"
 
-	"github.com/HappYness-Project/chatApi/internal/chat/domain"
+	"github.com/grupa-repo/chats/internal/chat/domain"
 	"github.com/google/uuid"
 )
 

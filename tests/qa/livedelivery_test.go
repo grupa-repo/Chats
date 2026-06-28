@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HappYness-Project/chatApi/tests/qa/harness"
+	"github.com/grupa-repo/chats/tests/qa/harness"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )

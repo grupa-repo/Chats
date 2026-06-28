@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HappYness-Project/chatApi/internal/chatread/domain"
+	"github.com/grupa-repo/chats/internal/chatread/domain"
 	"github.com/google/uuid"
 )
 

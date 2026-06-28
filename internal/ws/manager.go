@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/HappYness-Project/chatApi/internal/broadcaster"
-	"github.com/HappYness-Project/chatApi/loggers"
+	"github.com/grupa-repo/chats/internal/broadcaster"
+	"github.com/grupa-repo/chats/loggers"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )

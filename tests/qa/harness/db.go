@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/HappYness-Project/chatApi/dbs"
+	"github.com/grupa-repo/chats/dbs"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )

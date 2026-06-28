@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/HappYness-Project/chatApi/common"
-	"github.com/HappYness-Project/chatApi/configs"
+	"github.com/grupa-repo/chats/common"
+	"github.com/grupa-repo/chats/configs"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/pkgerrors"
 )

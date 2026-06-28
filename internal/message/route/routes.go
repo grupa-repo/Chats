@@ -7,15 +7,15 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/HappYness-Project/chatApi/common"
-	"github.com/HappYness-Project/chatApi/internal/broadcaster"
-	domain "github.com/HappYness-Project/chatApi/internal/message/domain"
-	"github.com/HappYness-Project/chatApi/internal/ws"
-	"github.com/HappYness-Project/chatApi/loggers"
+	"github.com/grupa-repo/chats/common"
+	"github.com/grupa-repo/chats/internal/broadcaster"
+	domain "github.com/grupa-repo/chats/internal/message/domain"
+	"github.com/grupa-repo/chats/internal/ws"
+	"github.com/grupa-repo/chats/loggers"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
-	msgRepo "github.com/HappYness-Project/chatApi/internal/message/repository"
+	msgRepo "github.com/grupa-repo/chats/internal/message/repository"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/jwtauth/v5"
 )

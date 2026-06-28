@@ -9,9 +9,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/HappYness-Project/chatApi/common"
-	"github.com/HappYness-Project/chatApi/internal/ws"
-	"github.com/HappYness-Project/chatApi/loggers"
+	"github.com/grupa-repo/chats/common"
+	"github.com/grupa-repo/chats/internal/ws"
+	"github.com/grupa-repo/chats/loggers"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )

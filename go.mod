@@ -1,4 +1,4 @@
-module github.com/HappYness-Project/chatApi
+module github.com/grupa-repo/chats
 
 go 1.26.4
 

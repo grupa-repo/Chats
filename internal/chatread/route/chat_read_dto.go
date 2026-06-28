@@ -1,8 +1,8 @@
 package route
 
 import (
-	"github.com/HappYness-Project/chatApi/internal/chatread/domain"
-	"github.com/HappYness-Project/chatApi/internal/chatread/repository"
+	"github.com/grupa-repo/chats/internal/chatread/domain"
+	"github.com/grupa-repo/chats/internal/chatread/repository"
 	"github.com/google/uuid"
 )
 

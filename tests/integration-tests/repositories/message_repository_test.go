@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	entity "github.com/HappYness-Project/chatApi/internal/message/domain"
-	"github.com/HappYness-Project/chatApi/internal/message/repository"
+	entity "github.com/grupa-repo/chats/internal/message/domain"
+	"github.com/grupa-repo/chats/internal/message/repository"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

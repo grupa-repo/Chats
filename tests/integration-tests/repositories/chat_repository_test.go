@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HappYness-Project/chatApi/dbs"
-	"github.com/HappYness-Project/chatApi/internal/chat/domain"
-	"github.com/HappYness-Project/chatApi/internal/chat/repository"
+	"github.com/grupa-repo/chats/dbs"
+	"github.com/grupa-repo/chats/internal/chat/domain"
+	"github.com/grupa-repo/chats/internal/chat/repository"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

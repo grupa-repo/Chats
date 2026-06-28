@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/HappYness-Project/chatApi/common"
+	"github.com/grupa-repo/chats/common"
 	"github.com/google/uuid"
 )
 

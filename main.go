@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/HappYness-Project/chatApi/api"
-	"github.com/HappYness-Project/chatApi/configs"
-	"github.com/HappYness-Project/chatApi/dbs"
-	"github.com/HappYness-Project/chatApi/loggers"
+	"github.com/grupa-repo/chats/api"
+	"github.com/grupa-repo/chats/configs"
+	"github.com/grupa-repo/chats/dbs"
+	"github.com/grupa-repo/chats/loggers"
 )
 
 func main() {
