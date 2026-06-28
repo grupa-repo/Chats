@@ -13,6 +13,7 @@ help:
 	@echo "make logs"
 	@echo "make down to remove docker containers"
 	@echo "make test to run the unit test"
+	@echo "make test-qa to run the QA WebSocket harness against a deployed env"
 
 version:
 	@LOCAL=$$(git rev-parse --short HEAD); \
@@ -69,3 +70,10 @@ logs:
 
 test:
 	go test -v $(shell go list ./... | grep -v integration-tests) -short
+
+# Runs the build-tagged QA harness against a deployed chat service.
+# Required env: QA_BASE_URL, QA_WS_URL, QA_JWT_SECRET, QA_DSN.
+# Optional:    QA_INTERNAL_TOKEN (required for the resync tests; others skip without it).
+# Tests skip with a clear message if any required var is missing.
+test-qa:
+	go test -tags=qa -v -count=1 ./tests/qa/...
