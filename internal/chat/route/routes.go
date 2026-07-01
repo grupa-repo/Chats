@@ -179,29 +179,16 @@ func (h *Handler) CreateChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var createdChat *domain.Chat
-
-	if request.UserId != "" {
-		if err != nil {
-			h.logger.Error().Err(err).Msg("Failed to create chat with participant")
-			common.ErrorResponse(w, http.StatusInternalServerError, common.ProblemDetails{
-				Title:  "Internal Server Error",
-				Detail: "Error occurred while creating chat with participant",
-			})
-			return
-		}
-	} else {
-		// Create chat only
-		createdChat, err = h.chatRepo.CreateChat(chat)
-		if err != nil {
-			h.logger.Error().Err(err).Msg("Failed to create chat")
-			common.ErrorResponse(w, http.StatusInternalServerError, common.ProblemDetails{
-				Title:  "Internal Server Error",
-				Detail: "Error occurred while creating chat",
-			})
-			return
-		}
+	createdChat, err := h.chatRepo.CreateChat(chat)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("Failed to create chat")
+		common.ErrorResponse(w, http.StatusInternalServerError, common.ProblemDetails{
+			Title:  "Internal Server Error",
+			Detail: "Error occurred while creating chat",
+		})
+		return
 	}
+
 	h.logger.Info().Msgf("Successfully created chat with ID: %s", createdChat.Id)
 	common.WriteJsonWithEncode(w, http.StatusCreated, createdChat)
 }

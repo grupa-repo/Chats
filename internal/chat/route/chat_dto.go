@@ -10,5 +10,4 @@ type CreateChatRequest struct {
 	Type        string     `json:"type"`
 	UserGroupId *int       `json:"usergroup_id,omitempty"`
 	ContainerId *uuid.UUID `json:"container_id,omitempty"`
-	UserId      string     `json:"user_id,omitempty"`
 }
