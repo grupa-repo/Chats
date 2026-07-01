@@ -7,7 +7,8 @@ type AddParticipantRequest struct {
 	GroupId int    `json:"group_id" validate:"required"`
 }
 type CreateChatRequest struct {
-	Type        string     `json:"type"`
-	UserGroupId *int       `json:"usergroup_id,omitempty"`
-	ContainerId *uuid.UUID `json:"container_id,omitempty"`
+	Type        string      `json:"type"`
+	UserGroupId *int        `json:"usergroup_id,omitempty"`
+	ContainerId *uuid.UUID  `json:"container_id,omitempty"`
+	MemberIds   []uuid.UUID `json:"member_ids,omitempty"`
 }

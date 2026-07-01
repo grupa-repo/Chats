@@ -18,6 +18,7 @@ type ChatReadRepository interface {
 	ListUnreadCounts(userID uuid.UUID, chatIDs []uuid.UUID) ([]UnreadEntry, error)
 	ListReads(userID uuid.UUID) ([]domain.ChatRead, error)
 	ListChatIDsForUser(userID uuid.UUID) ([]uuid.UUID, error)
+	AddMember(userID, chatID uuid.UUID) error
 }
 
 type BulkReadItem struct {
@@ -268,6 +269,20 @@ func (r *ChatReadRepo) ListChatIDsForUser(userID uuid.UUID) ([]uuid.UUID, error)
 		return nil, err
 	}
 	return ids, nil
+}
+
+// AddMember seeds a chat_reads row so the (user, chat) pair is treated as
+// a member by the WS layer, which derives membership from this table.
+// last_read_message_id is NULL — the user has read nothing yet. If a row
+// already exists it is left alone so an established read marker is not
+// clobbered.
+func (r *ChatReadRepo) AddMember(userID, chatID uuid.UUID) error {
+	query := `
+		INSERT INTO chat_reads (user_id, chat_id, last_read_message_id, last_read_at)
+		VALUES ($1, $2, NULL, NOW())
+		ON CONFLICT (user_id, chat_id) DO NOTHING`
+	_, err := r.db.Exec(query, userID, chatID)
+	return err
 }
 
 func (r *ChatReadRepo) UnreadCount(userID, chatID uuid.UUID) (int, error) {

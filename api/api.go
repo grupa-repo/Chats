@@ -65,7 +65,7 @@ func (s *ApiServer) Setup() *chi.Mux {
 	bus := broadcaster.NewInProcess()
 	wsManager := ws.NewManager(s.logger, bus)
 	msgHandler := messageRoute.NewHandler(s.logger, *msgRepo, chatReadRepo, s.secretKey, wsManager)
-	chatHandler := chatRoute.NewHandler(s.logger, *chatRepo, s.secretKey)
+	chatHandler := chatRoute.NewHandler(s.logger, *chatRepo, *chatReadRepo, s.secretKey)
 	chatReadHandler := chatReadRoute.NewHandler(s.logger, *chatReadRepo, bus)
 	membershipHandler := membershipRoute.NewHandler(s.logger, wsManager, s.internalAPIToken)
 

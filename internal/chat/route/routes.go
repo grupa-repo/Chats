@@ -9,23 +9,27 @@ import (
 	"github.com/grupa-repo/chats/common"
 	domain "github.com/grupa-repo/chats/internal/chat/domain"
 	"github.com/grupa-repo/chats/internal/chat/repository"
+	chatReadRepo "github.com/grupa-repo/chats/internal/chatread/repository"
 	"github.com/grupa-repo/chats/loggers"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/jwtauth"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
 
 type Handler struct {
-	logger    *loggers.AppLogger
-	chatRepo  repository.ChatRepo
-	jwtSecret []byte
+	logger       *loggers.AppLogger
+	chatRepo     repository.ChatRepo
+	chatReadRepo chatReadRepo.ChatReadRepo
+	jwtSecret    []byte
 }
 
-func NewHandler(logger *loggers.AppLogger, chatRepo repository.ChatRepo, secretKey string) *Handler {
+func NewHandler(logger *loggers.AppLogger, chatRepo repository.ChatRepo, chatReadRepo chatReadRepo.ChatReadRepo, secretKey string) *Handler {
 	return &Handler{
-		logger:    logger,
-		chatRepo:  chatRepo,
-		jwtSecret: []byte(secretKey),
+		logger:       logger,
+		chatRepo:     chatRepo,
+		chatReadRepo: chatReadRepo,
+		jwtSecret:    []byte(secretKey),
 	}
 }
 
@@ -189,8 +193,42 @@ func (h *Handler) CreateChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	seen := make(map[uuid.UUID]struct{})
+	if creatorID, ok := userIDFromContext(r); ok {
+		seen[creatorID] = struct{}{}
+	}
+	for _, id := range request.MemberIds {
+		if id == uuid.Nil {
+			continue
+		}
+		seen[id] = struct{}{}
+	}
+	for memberID := range seen {
+		if err := h.chatReadRepo.AddMember(memberID, createdChat.Id); err != nil {
+			h.logger.Error().Err(err).
+				Str("chatID", createdChat.Id.String()).
+				Str("userID", memberID.String()).
+				Msg("Failed to seed chat membership")
+		}
+	}
+
 	h.logger.Info().Msgf("Successfully created chat with ID: %s", createdChat.Id)
 	common.WriteJsonWithEncode(w, http.StatusCreated, createdChat)
+}
+
+func userIDFromContext(r *http.Request) (uuid.UUID, bool) {
+	_, claims, err := jwtauth.FromContext(r.Context())
+	if err != nil || claims == nil {
+		return uuid.Nil, false
+	}
+	for _, key := range []string{"nameid", "sub"} {
+		if v, ok := claims[key].(string); ok {
+			if id, err := uuid.Parse(v); err == nil {
+				return id, true
+			}
+		}
+	}
+	return uuid.Nil, false
 }
 
 func (h *Handler) RemoveChat(w http.ResponseWriter, r *http.Request) {
